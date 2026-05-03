@@ -5,18 +5,17 @@ const details = () => {
     Stage: "Pre-processing",
     Name: "Remove Video Commentary Tracks",
     Type: "Video",
-    Operation: 'Transcode',
+    Operation: "Transcode",
     Description: `[Contains built-in filter] If commentary tracks are detected, they will be removed. \n\n`,
     Version: "1.00",
     Tags: "pre-processing,ffmpeg,audio only",
-    Inputs:[],
+    Inputs: [],
   };
-}
+};
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const plugin = (file, librarySettings, inputs, otherArguments) => {
-    
-    const lib = require('../methods/lib')();
+  const lib = require("../methods/lib")();
   // eslint-disable-next-line @typescript-eslint/no-unused-vars,no-param-reassign
   inputs = lib.loadDefaultValues(inputs, details);
   //Must return this object
@@ -24,7 +23,7 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   var response = {
     processFile: false,
     preset: "",
-    container: ".mp4",
+    container: ".mkv",
     handBrakeMode: false,
     FFmpegMode: false,
     reQueueAfter: false,
@@ -42,27 +41,35 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   var audioIdx = -1;
   var hasCommentaryTrack = false;
   var ffmpegCommandInsert = "";
+  var tracksRemoved = 0;
 
   for (var i = 0; i < file.ffProbeData.streams.length; i++) {
-    //keep track of audio streams for when removing commentary track
-    try {
-      if (file.ffProbeData.streams[i].codec_type.toLowerCase() == "audio") {
-        audioIdx++;
-      }
-    } catch (err) {}
+    var stream = file.ffProbeData.streams[i];
+    var isCommentary = false;
 
-    //check if commentary track and passing audio stream number
     try {
-      if (
-        file.ffProbeData.streams[i].codec_type.toLowerCase() == "audio" &&
-        file.ffProbeData.streams[i].disposition.comment == 1 ||
-        file.ffProbeData.streams[i].codec_type.toLowerCase() == "audio" &&
-        file.ffProbeData.streams[i].tags.title
-          .toLowerCase()
-          .includes("commentary")
-      ) {
-        ffmpegCommandInsert += ` -map -0:a:${audioIdx}`;
-        hasCommentaryTrack = true;
+      if (stream.codec_type && stream.codec_type.toLowerCase() === "audio") {
+        audioIdx++;
+
+        var hasCommentDisposition =
+          stream.disposition && stream.disposition.comment === 1;
+        var hasCommentaryInTitle =
+          stream.tags &&
+          stream.tags.title &&
+          stream.tags.title.toLowerCase().includes("commentary");
+        var hasCommentaryInHandlerName =
+          stream.tags &&
+          stream.tags.handler_name &&
+          stream.tags.handler_name.toLowerCase().includes("commentary");
+
+        if (hasCommentDisposition || hasCommentaryInTitle || hasCommentaryInHandlerName) {
+          isCommentary = true;
+          hasCommentaryTrack = true;
+          ffmpegCommandInsert += ` -map -0:a:${audioIdx}`;
+          tracksRemoved++;
+          response.infoLog +=
+            `☒Removing commentary audio track ${audioIdx} (stream index ${i})\n`;
+        }
       }
     } catch (err) {}
   }
@@ -74,7 +81,8 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     response.handBrakeMode = false;
     response.FFmpegMode = true;
     response.reQueueAfter = true;
-    response.infoLog += "☒File contains commentary tracks. Removing! \n";
+    response.infoLog +=
+      `☒Removed ${tracksRemoved} commentary track(s)\n`;
     return response;
   } else {
     response.infoLog += "☑File doesn't contain commentary tracks! \n";
@@ -83,7 +91,7 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   response.processFile = false;
   response.infoLog += "☑File meets conditions! \n";
   return response;
-}
+};
 
 module.exports.details = details;
 module.exports.plugin = plugin;
