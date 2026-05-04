@@ -65,43 +65,43 @@ var details = function () { return ({
 exports.details = details;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 var plugin = function (args) { return __awaiter(void 0, void 0, void 0, function () {
-    var lib, cliArgs, cli, res;
+    var lib, container, tempFilePath, cliArgs, cli, res;
     return __generator(this, function (_a) {
         switch (_a.label) {
             case 0:
                 lib = require('../../../../../methods/lib')();
                 // eslint-disable-next-line @typescript-eslint/no-unused-vars,no-param-reassign
                 args.inputs = lib.loadDefaultValues(args.inputs, details);
-                var container = (0, fileUtils_1.getContainer)(args.inputFileObj._id);
-                var tempFilePath = "".concat((0, fileUtils_1.getPluginWorkDir)(args), "/").concat((0, fileUtils_1.getFileName)(args.inputFileObj._id), ".").concat(container);
-                yield fs_1.promises.copyFile(args.inputFileObj._id, tempFilePath);
-                cliArgs = [
-                    '--add-track-statistics-tags',
-                    tempFilePath,
-                ];
-                cli = new cliUtils_1.CLI({
-                    cli: args.mkvpropeditPath,
-                    spawnArgs: cliArgs,
-                    spawnOpts: {},
-                    jobLog: args.jobLog,
-                    outputFilePath: tempFilePath,
-                    inputFileObj: args.inputFileObj,
-                    logFullCliOutput: args.logFullCliOutput,
-                    updateWorker: args.updateWorker,
-                    args: args,
-                });
-                return [4 /*yield*/, cli.runCli()];
-            case 1:
-                res = _a.sent();
-                if (res.cliExitCode !== 0) {
-                    args.jobLog('Running MKVPropEdit failed');
-                    throw new Error('Running MKVPropEdit failed');
-                }
-                return [2 /*return*/, {
+                container = (0, fileUtils_1.getContainer)(args.inputFileObj._id);
+                tempFilePath = "".concat((0, fileUtils_1.getPluginWorkDir)(args), "/").concat((0, fileUtils_1.getFileName)(args.inputFileObj._id), ".").concat(container);
+                return [2 /*return*/, fs_1.promises.copyFile(args.inputFileObj._id, tempFilePath).then(function () {
+                    cliArgs = [
+                        '--add-track-statistics-tags',
+                        tempFilePath,
+                    ];
+                    cli = new cliUtils_1.CLI({
+                        cli: args.mkvpropeditPath,
+                        spawnArgs: cliArgs,
+                        spawnOpts: {},
+                        jobLog: args.jobLog,
+                        outputFilePath: tempFilePath,
+                        inputFileObj: args.inputFileObj,
+                        logFullCliOutput: args.logFullCliOutput,
+                        updateWorker: args.updateWorker,
+                        args: args,
+                    });
+                    return cli.runCli();
+                }).then(function (res) {
+                    if (res.cliExitCode !== 0) {
+                        args.jobLog('Running MKVPropEdit failed');
+                        throw new Error('Running MKVPropEdit failed');
+                    }
+                    return {
                         outputFileObj: tempFilePath,
                         outputNumber: 1,
                         variables: args.variables,
-                    }];
+                    };
+                })];
         }
     });
 }); };
