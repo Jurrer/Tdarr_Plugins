@@ -6,19 +6,19 @@ const details = () => ({
   Type: "Audio",
   Operation: "Transcode",
   Description:
-    "This plugin can convert any 2.0 audio track/s to opus and can create downmixed audio tracks. \n\n",
-  Version: "2.4",
+    "This plugin can convert all audio tracks to opus and can create downmixed audio tracks. \n\n",
+  Version: "2.5",
   Tags: "pre-processing,ffmpeg,audio only,configurable",
   Inputs: [
     {
-      name: "opus_stereo",
+      name: "convert_all_to_opus",
       type: "boolean",
       defaultValue: false,
       inputUI: {
         type: "dropdown",
         options: ["false", "true"],
       },
-      tooltip: `Specify if any 2.0 audio tracks should be converted to opus for maximum compatability with devices.
+      tooltip: `Specify if all audio tracks should be converted to opus for maximum compatability with devices.
                     \\nOptional.
              \\nExample:\\n
              true
@@ -203,22 +203,27 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
         // Error
       }
 
-      // Catch error here incase user left inputs.downmix empty.
+      // Catch error here incase user left inputs.convert_all_to_opus empty.
       try {
-        // Check if inputs.opus_stereo is set to true.
-        if (inputs.opus_stereo === true) {
-          // Check if codec_name for stream is NOT opus AND check if channel ammount is 2.
-          if (
-            file.ffProbeData.streams[i].codec_name !== "opus" &&
-            file.ffProbeData.streams[i].channels === 2
-          ) {
+        // Check if inputs.convert_all_to_opus is set to true.
+        if (inputs.convert_all_to_opus === true) {
+          // Check if codec_name for stream is NOT opus.
+          // Skip if downmix will handle this track (6/8ch with downmix enabled)
+          const isDownmixTrack =
+            inputs.downmix === true &&
+            (file.ffProbeData.streams[i].channels === 6 ||
+              file.ffProbeData.streams[i].channels === 8 ||
+              (file.ffProbeData.streams[i].channels > 2 &&
+                file.ffProbeData.streams[i].channels !== 6 &&
+                file.ffProbeData.streams[i].channels !== 8));
+          if (file.ffProbeData.streams[i].codec_name !== "opus" && !isDownmixTrack) {
             let lang = file.ffProbeData.streams[i].tags?.language || "";
             ffmpegCommandInsert += `-c:a:${audioIdx} libopus `;
             if (lang) {
               ffmpegCommandInsert += `-metadata:s:a:${audioIdx} language=${lang} `;
             }
             response.infoLog +=
-              "☒Audio track is 2 channel but is not opus. Converting. \n";
+              `☒Audio track is ${file.ffProbeData.streams[i].channels} channel but is not opus. Converting. \n`;
             convert = true;
           }
         }
