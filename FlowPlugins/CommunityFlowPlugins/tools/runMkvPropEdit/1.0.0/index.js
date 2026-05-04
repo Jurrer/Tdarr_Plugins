@@ -98,7 +98,9 @@ var plugin = function (args) { return __awaiter(void 0, void 0, void 0, function
                     throw new Error('Running MKVPropEdit failed');
                 }
                 return [2 /*return*/, {
-                        outputFileObj: tempFilePath,
+                        outputFileObj: {
+                            _id: tempFilePath,
+                        },
                         outputNumber: 1,
                         variables: args.variables,
                     }];

@@ -69,7 +69,9 @@ const plugin = async (args:IpluginInputArgs):Promise<IpluginOutputArgs> => {
   }
 
   return {
-    outputFileObj: tempFilePath,
+    outputFileObj: {
+      _id: tempFilePath,
+    },
     outputNumber: 1,
     variables: args.variables,
   };
