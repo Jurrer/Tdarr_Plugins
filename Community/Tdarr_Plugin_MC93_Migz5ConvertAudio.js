@@ -120,24 +120,9 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   // Set up required variables.
   let ffmpegCommandInsert = "";
   let audioIdx = 0;
-  let has2Channel = false;
   let convert = false;
   let is2channelAdded = false;
   const downmixedStreamIndices = [];
-
-  // Go through each stream in the file.
-  for (let i = 0; i < file.ffProbeData.streams.length; i++) {
-    try {
-      // Go through all audio streams and check if 2 & 6 channel tracks exist or not.
-      if (file.ffProbeData.streams[i].codec_type.toLowerCase() === "audio") {
-        if (file.ffProbeData.streams[i].channels === 2) {
-          has2Channel = true;
-        }
-      }
-    } catch (err) {
-      // Error
-    }
-  }
 
   // Go through each stream in the file.
   for (let i = 0; i < file.ffProbeData.streams.length; i++) {
@@ -151,10 +136,9 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
       try {
         // Check if inputs.downmix is set to true.
         if (inputs.downmix === true) {
-          // Check if file has 8 channel audio but no 2 channel, if so then create extra downmix from the 8 channel to 2 channel
+          // Check if file has 8 channel audio, create downmix from the 8 channel to 2 channel
           if (
             file.ffProbeData.streams[i].channels === 8 &&
-            has2Channel === false &&
             (inputs.downmix_single_track === false ||
               (inputs.downmix_single_track === true &&
                 is2channelAdded === false))
@@ -165,17 +149,16 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
               ffmpegCommandInsert += `-metadata:s:a:${audioIdx} language=${lang} `;
             }
             response.infoLog +=
-              "☒Audio track is 8 channel, no 2 channel exists. Creating 2 channel from 8 channel. \n";
+              "☒Audio track is 8 channel. Creating 2 channel from 8 channel. \n";
             convert = true;
             is2channelAdded = true;
             if (inputs.remove_original === true) {
               downmixedStreamIndices.push(i);
             }
           }
-          // Check if file has 6 channel audio but no 2 channel, if so then create extra downmix from the 6 channel.
+          // Check if file has 6 channel audio, create downmix from the 6 channel.
           if (
             file.ffProbeData.streams[i].channels === 6 &&
-            has2Channel === false &&
             (inputs.downmix_single_track === false ||
               (inputs.downmix_single_track === true &&
                 is2channelAdded === false))
@@ -186,7 +169,7 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
               ffmpegCommandInsert += `-metadata:s:a:${audioIdx} language=${lang} `;
             }
             response.infoLog +=
-              "☒Audio track is 6 channel, no 2 channel exists. Creating 2 channel from 6 channel. \n";
+              "☒Audio track is 6 channel. Creating 2 channel from 6 channel. \n";
             convert = true;
             is2channelAdded = true;
             if (inputs.remove_original === true) {
@@ -198,7 +181,6 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
             file.ffProbeData.streams[i].channels > 2 &&
             file.ffProbeData.streams[i].channels !== 6 &&
             file.ffProbeData.streams[i].channels !== 8 &&
-            has2Channel === false &&
             (inputs.downmix_single_track === false ||
               (inputs.downmix_single_track === true &&
                 is2channelAdded === false))
@@ -209,7 +191,7 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
               ffmpegCommandInsert += `-metadata:s:a:${audioIdx} language=${lang} `;
             }
             response.infoLog +=
-              `☒Audio track is ${file.ffProbeData.streams[i].channels} channel, no 2 channel exists. Creating 2 channel. \n`;
+              `☒Audio track is ${file.ffProbeData.streams[i].channels} channel. Creating 2 channel. \n`;
             convert = true;
             is2channelAdded = true;
             if (inputs.remove_original === true) {
