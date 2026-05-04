@@ -1,9 +1,15 @@
 import { CLI } from '../../../../FlowHelpers/1.0.0/cliUtils';
 import {
+  getContainer,
+  getFileName,
+  getPluginWorkDir,
+} from '../../../../FlowHelpers/1.0.0/fileUtils';
+import {
   IpluginDetails,
   IpluginInputArgs,
   IpluginOutputArgs,
 } from '../../../../FlowHelpers/1.0.0/interfaces/interfaces';
+import * as fs from 'fs/promises';
 
 /* eslint no-plusplus: ["error", { "allowForLoopAfterthoughts": true }] */
 const details = ():IpluginDetails => ({
@@ -34,9 +40,13 @@ const plugin = async (args:IpluginInputArgs):Promise<IpluginOutputArgs> => {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars,no-param-reassign
   args.inputs = lib.loadDefaultValues(args.inputs, details);
 
+  const container = getContainer(args.inputFileObj._id);
+  const tempFilePath = `${getPluginWorkDir(args)}/${getFileName(args.inputFileObj._id)}.${container}`;
+  await fs.copyFile(args.inputFileObj._id, tempFilePath);
+
   const cliArgs = [
     '--add-track-statistics-tags',
-    args.inputFileObj._id,
+    tempFilePath,
   ];
 
   const cli = new CLI({
@@ -44,7 +54,7 @@ const plugin = async (args:IpluginInputArgs):Promise<IpluginOutputArgs> => {
     spawnArgs: cliArgs,
     spawnOpts: {},
     jobLog: args.jobLog,
-    outputFilePath: '',
+    outputFilePath: tempFilePath,
     inputFileObj: args.inputFileObj,
     logFullCliOutput: args.logFullCliOutput,
     updateWorker: args.updateWorker,
@@ -59,7 +69,7 @@ const plugin = async (args:IpluginInputArgs):Promise<IpluginOutputArgs> => {
   }
 
   return {
-    outputFileObj: args.inputFileObj,
+    outputFileObj: tempFilePath,
     outputNumber: 1,
     variables: args.variables,
   };
