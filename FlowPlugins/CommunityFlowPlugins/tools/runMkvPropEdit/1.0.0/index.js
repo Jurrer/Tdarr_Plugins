@@ -39,7 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.plugin = exports.details = void 0;
 var cliUtils_1 = require("../../../../FlowHelpers/1.0.0/cliUtils");
 var fileUtils_1 = require("../../../../FlowHelpers/1.0.0/fileUtils");
-var fs_1 = require("fs");
+var fsSync = require("fs");
 /* eslint no-plusplus: ["error", { "allowForLoopAfterthoughts": true }] */
 var details = function () { return ({
     name: 'Run MKVPropEdit',
@@ -74,34 +74,34 @@ var plugin = function (args) { return __awaiter(void 0, void 0, void 0, function
                 args.inputs = lib.loadDefaultValues(args.inputs, details);
                 container = (0, fileUtils_1.getContainer)(args.inputFileObj._id);
                 tempFilePath = "".concat((0, fileUtils_1.getPluginWorkDir)(args), "/").concat((0, fileUtils_1.getFileName)(args.inputFileObj._id), ".").concat(container);
-                return [2 /*return*/, fs_1.promises.copyFile(args.inputFileObj._id, tempFilePath).then(function () {
-                    cliArgs = [
-                        '--add-track-statistics-tags',
-                        tempFilePath,
-                    ];
-                    cli = new cliUtils_1.CLI({
-                        cli: args.mkvpropeditPath,
-                        spawnArgs: cliArgs,
-                        spawnOpts: {},
-                        jobLog: args.jobLog,
-                        outputFilePath: tempFilePath,
-                        inputFileObj: args.inputFileObj,
-                        logFullCliOutput: args.logFullCliOutput,
-                        updateWorker: args.updateWorker,
-                        args: args,
-                    });
-                    return cli.runCli();
-                }).then(function (res) {
-                    if (res.cliExitCode !== 0) {
-                        args.jobLog('Running MKVPropEdit failed');
-                        throw new Error('Running MKVPropEdit failed');
-                    }
-                    return {
+                fsSync.copyFileSync(args.inputFileObj._id, tempFilePath);
+                cliArgs = [
+                    '--add-track-statistics-tags',
+                    tempFilePath,
+                ];
+                cli = new cliUtils_1.CLI({
+                    cli: args.mkvpropeditPath,
+                    spawnArgs: cliArgs,
+                    spawnOpts: {},
+                    jobLog: args.jobLog,
+                    outputFilePath: tempFilePath,
+                    inputFileObj: args.inputFileObj,
+                    logFullCliOutput: args.logFullCliOutput,
+                    updateWorker: args.updateWorker,
+                    args: args,
+                });
+                return [4 /*yield*/, cli.runCli()];
+            case 1:
+                res = _a.sent();
+                if (res.cliExitCode !== 0) {
+                    args.jobLog('Running MKVPropEdit failed');
+                    throw new Error('Running MKVPropEdit failed');
+                }
+                return [2 /*return*/, {
                         outputFileObj: tempFilePath,
                         outputNumber: 1,
                         variables: args.variables,
-                    };
-                })];
+                    }];
         }
     });
 }); };
