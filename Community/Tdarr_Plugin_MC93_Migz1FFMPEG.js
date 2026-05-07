@@ -269,13 +269,16 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   }
 
   // Check if 10bit variable is true.
+  // When force_conform is enabled, the filter chain may contain additional
+  // filters that don't work with GPU frames. Use softwareFrames to force
+  // CPU-based pixel format conversion instead of scale_cuda.
+  const nvdecOptions = inputs.enable_10bit === true && inputs.force_conform === true
+    ? { softwareFrames: true }
+    : {};
+
   if (inputs.enable_10bit === true) {
-    // When force_conform is enabled, the filter chain may contain additional
-    // filters that don't work with GPU frames. Use softwareFrames to force
-    // CPU-based pixel format conversion instead of scale_cuda.
     const { getNvenc10BitFormatArg } = require('../methods/nvdecPreset');
-    const options = inputs.force_conform === true ? { softwareFrames: true } : {};
-    extraArguments += getNvenc10BitFormatArg(file, options);
+    extraArguments += getNvenc10BitFormatArg(file, nvdecOptions);
   }
 
   // Check if b frame variable is true.
@@ -371,8 +374,10 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   // Use modern CUDA hwaccel instead of legacy *_cuvid decoders
   // which cause frame-ordering issues (stuttering) with FFmpeg 7+.
   // Helper returns '' for AV1 to keep older GPUs on software decode.
+  // When enable_10bit + force_conform are both enabled, use softwareFrames
+  // to avoid GPU frame format conflicts with the pixel format conversion.
   const { getNvdecHwaccelPreset } = require('../methods/nvdecPreset');
-  response.preset = getNvdecHwaccelPreset(file);
+  response.preset = getNvdecHwaccelPreset(file, nvdecOptions);
 
   response.preset +=
     `${genpts}, -map 0 -c:v hevc_nvenc -cq:v 19 ${bitrateSettings} ` +
