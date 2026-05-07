@@ -12,3 +12,7 @@
 /Local
 /FlowPluginsTs/LocalFlowPlugins
 /FlowPlugins/LocalFlowPlugins
+
+*.mkv
+.DS_Store
+*.txt

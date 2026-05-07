@@ -270,11 +270,12 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
 
   // Check if 10bit variable is true.
   if (inputs.enable_10bit === true) {
-    // Use scale_cuda when CUDA hwaccel is active (frames live in GPU memory
-    // and `-pix_fmt p010le` fails on hwframes); fall back to `-pix_fmt
-    // p010le` for software decode paths.
+    // When force_conform is enabled, the filter chain may contain additional
+    // filters that don't work with GPU frames. Use softwareFrames to force
+    // CPU-based pixel format conversion instead of scale_cuda.
     const { getNvenc10BitFormatArg } = require('../methods/nvdecPreset');
-    extraArguments += getNvenc10BitFormatArg(file);
+    const options = inputs.force_conform === true ? { softwareFrames: true } : {};
+    extraArguments += getNvenc10BitFormatArg(file, options);
   }
 
   // Check if b frame variable is true.

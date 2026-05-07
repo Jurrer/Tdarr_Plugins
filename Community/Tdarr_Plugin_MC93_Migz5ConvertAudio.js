@@ -100,8 +100,8 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     infoLog: "",
   };
 
-  //  Check if both inputs.opus_stereo AND inputs.downmix have been left empty. If they have then exit plugin.
-  if (inputs && inputs.opus_stereo === "" && inputs.downmix === "") {
+  //  Check if both inputs.convert_all_to_opus AND inputs.downmix have been left empty. If they have then exit plugin.
+  if (inputs && inputs.convert_all_to_opus === "" && inputs.downmix === "") {
     response.infoLog +=
       "☒Plugin has not been configured, please configure required options. Skipping this plugin. \n";
     response.processFile = false;
