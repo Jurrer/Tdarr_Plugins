@@ -17,6 +17,12 @@ jest.mock('child_process', () => ({
 
 const flush = () => new Promise<void>((r) => { setImmediate(r); });
 
+const advanceOnePoll = async () => {
+  jest.advanceTimersByTime(10000);
+  await flush();
+  await flush();
+};
+
 describe('preventSleepWhileEncoding Plugin', () => {
   let baseArgs: IpluginInputArgs;
   let mockAxiosGet: jest.Mock;
@@ -56,13 +62,11 @@ describe('preventSleepWhileEncoding Plugin', () => {
     const d = details();
     expect(d.name).toBe('Prevent Sleep While Encoding');
     expect(d.inputs.length).toBe(1);
-    expect(d.outputs.length).toBe(2);
-    expect(d.outputs[0].number).toBe(1);
-    expect(d.outputs[1].number).toBe(2);
+    expect(d.outputs.length).toBe(1);
     expect(d.tags).toContain('automations');
   });
 
-  it('should return output 2 on first call with no workers (needs 3 confirmations)', async () => {
+  it('should exit after 3 consecutive no-workers confirmations', async () => {
     mockAxiosGet.mockResolvedValue({
       data: {
         123: {
@@ -74,81 +78,71 @@ describe('preventSleepWhileEncoding Plugin', () => {
     });
 
     const pluginPromise = plugin(baseArgs);
-    jest.advanceTimersByTime(10000);
     await flush();
 
-    const result = await pluginPromise;
-    expect(result.outputNumber).toBe(2);
-    expect(result.variables.confirmedCount).toBe(1);
-  });
-
-  it('should return output 1 on third call with no workers (3 confirmations)', async () => {
-    mockAxiosGet.mockResolvedValue({
-      data: {
-        123: {
-          workers: {
-            w1: { job: { jobId: 'my-job-1' }, file: 'something.mkv' },
-          },
-        },
-      },
-    });
-
-    baseArgs.variables = { confirmedCount: 2 };
-
-    const pluginPromise = plugin(baseArgs);
-    jest.advanceTimersByTime(10000);
-    await flush();
+    for (let i = 0; i < 3; i += 1) {
+      await advanceOnePoll(); // eslint-disable-line no-await-in-loop
+    }
 
     const result = await pluginPromise;
     expect(result.outputNumber).toBe(1);
-    expect(result.variables.confirmedCount).toBe(0);
+    expect(baseArgs.jobLog).toHaveBeenCalledWith(
+      expect.stringContaining('No other workers running'),
+    );
   });
 
-  it('should return output 2 when other workers are running', async () => {
-    mockAxiosGet.mockResolvedValue({
-      data: {
-        123: {
-          workers: {
-            w1: { job: { jobId: 'my-job-1' }, file: 'something.mkv' },
-            w2: { job: { jobId: 'other-job' }, file: 'real.mkv' },
-          },
-        },
-      },
-    });
-
-    const pluginPromise = plugin(baseArgs);
-    jest.advanceTimersByTime(10000);
-    await flush();
-
-    const result = await pluginPromise;
-    expect(result.outputNumber).toBe(2);
-    expect(result.variables.confirmedCount).toBe(0);
-  });
-
-  it('should reset confirmedCount when workers appear', async () => {
+  it('should reset confirmation count when workers appear', async () => {
     let callCount = 0;
     mockAxiosGet.mockImplementation(() => {
       callCount += 1;
+      const hasOtherWorker = callCount === 3;
       return Promise.resolve({
         data: {
           123: {
             workers: {
               w1: { job: { jobId: 'my-job-1' }, file: 'something.mkv' },
+              ...(hasOtherWorker ? { w2: { job: { jobId: 'other-job' }, file: 'real.mkv' } } : {}),
             },
           },
         },
       });
     });
 
-    baseArgs.variables = { confirmedCount: 2 };
-
     const pluginPromise = plugin(baseArgs);
-    jest.advanceTimersByTime(10000);
     await flush();
 
+    for (let i = 0; i < 6; i += 1) {
+      await advanceOnePoll(); // eslint-disable-line no-await-in-loop
+    }
+
     const result = await pluginPromise;
-    expect(result.outputNumber).toBe(2);
-    expect(result.variables.confirmedCount).toBe(0);
+    expect(result.outputNumber).toBe(1);
+    expect(callCount).toBe(6);
+  });
+
+  it('should bump percentage each iteration', async () => {
+    mockAxiosGet.mockResolvedValue({
+      data: {
+        123: {
+          workers: {
+            w1: { job: { jobId: 'my-job-1' }, file: 'something.mkv' },
+          },
+        },
+      },
+    });
+
+    const pluginPromise = plugin(baseArgs);
+    await flush();
+
+    for (let i = 0; i < 3; i += 1) {
+      await advanceOnePoll(); // eslint-disable-line no-await-in-loop
+    }
+
+    await pluginPromise;
+
+    expect(baseArgs.updateWorker).toHaveBeenCalledWith({ percentage: 0 });
+    expect(baseArgs.updateWorker).toHaveBeenCalledWith({ percentage: 1 });
+    expect(baseArgs.updateWorker).toHaveBeenCalledWith({ percentage: 2 });
   });
 
   it('should skip automation workers when counting', async () => {
@@ -163,29 +157,15 @@ describe('preventSleepWhileEncoding Plugin', () => {
       },
     });
 
-    baseArgs.variables = { confirmedCount: 2 };
-
     const pluginPromise = plugin(baseArgs);
-    jest.advanceTimersByTime(10000);
     await flush();
+
+    for (let i = 0; i < 3; i += 1) {
+      await advanceOnePoll(); // eslint-disable-line no-await-in-loop
+    }
 
     const result = await pluginPromise;
     expect(result.outputNumber).toBe(1);
-    expect(result.variables.confirmedCount).toBe(0);
-  });
-
-  it('should reset confirmedCount on error and return output 2', async () => {
-    mockAxiosGet.mockRejectedValue(new Error('Network error'));
-
-    baseArgs.variables = { confirmedCount: 2 };
-
-    const pluginPromise = plugin(baseArgs);
-    jest.advanceTimersByTime(10000);
-    await flush();
-
-    const result = await pluginPromise;
-    expect(result.outputNumber).toBe(2);
-    expect(result.variables.confirmedCount).toBe(0);
   });
 
   describe('Sleep Prevention', () => {
@@ -195,9 +175,10 @@ describe('preventSleepWhileEncoding Plugin', () => {
       });
 
       const pluginPromise = plugin(baseArgs);
-      jest.advanceTimersByTime(10000);
       await flush();
-
+      for (let i = 0; i < 3; i += 1) {
+        await advanceOnePoll(); // eslint-disable-line no-await-in-loop
+      }
       await pluginPromise;
 
       expect(mockSpawn).toHaveBeenCalledWith(
@@ -215,14 +196,22 @@ describe('preventSleepWhileEncoding Plugin', () => {
       });
 
       const pluginPromise = plugin(baseArgs);
-      jest.advanceTimersByTime(10000);
       await flush();
-
+      for (let i = 0; i < 3; i += 1) {
+        await advanceOnePoll(); // eslint-disable-line no-await-in-loop
+      }
       await pluginPromise;
 
+      // spawn starts a long-running PowerShell that refreshes the state
       expect(mockSpawn).toHaveBeenCalledWith(
         'powershell',
         expect.arrayContaining([expect.stringContaining('SetThreadExecutionState')]),
+        expect.any(Object),
+      );
+      // execSync is only used for the cleanup (clear) call
+      expect(mockExecSync).toHaveBeenCalledTimes(1);
+      expect(mockExecSync).toHaveBeenCalledWith(
+        expect.stringContaining('SetThreadExecutionState'),
         expect.any(Object),
       );
     });
@@ -238,12 +227,14 @@ describe('preventSleepWhileEncoding Plugin', () => {
       mockSpawn.mockReturnValue({ kill: mockKill });
 
       const pluginPromise = plugin(baseArgs);
-      jest.advanceTimersByTime(10000);
       await flush();
-
+      for (let i = 0; i < 3; i += 1) {
+        await advanceOnePoll(); // eslint-disable-line no-await-in-loop
+      }
       await pluginPromise;
 
       expect(mockSpawn).toHaveBeenCalledWith('caffeinate', ['-i'], expect.any(Object));
+      expect(mockKill).toHaveBeenCalled();
     });
   });
 });
