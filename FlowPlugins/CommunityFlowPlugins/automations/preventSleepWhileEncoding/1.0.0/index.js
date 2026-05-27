@@ -41,9 +41,9 @@ var automationUtils_1 = require("../../../../FlowHelpers/1.0.0/automationUtils")
 /* eslint no-plusplus: ["error", { "allowForLoopAfterthoughts": true }] */
 var details = function () { return ({
     name: 'Prevent Sleep While Encoding',
-    description: 'Loops while other workers on this node are active, preventing the system from sleeping.'
-        + ' Bumps worker percentage each iteration. Exits when no other workers are running'
-        + ' (confirmed 3 times in a row).',
+    description: 'Prevents system sleep while other workers are active.'
+        + ' Output 1: no other workers running. Output 2: other workers still running'
+        + ' (flow should loop output 2 back to this plugin).',
     style: {
         borderColor: '#FF9800',
     },
@@ -62,7 +62,7 @@ var details = function () { return ({
             inputUI: {
                 type: 'text',
             },
-            tooltip: 'How often to check if other workers are still running.',
+            tooltip: 'How long to wait between checks.',
         },
     ],
     outputs: [
@@ -70,12 +70,16 @@ var details = function () { return ({
             number: 1,
             tooltip: 'No other workers running - safe to continue',
         },
+        {
+            number: 2,
+            tooltip: 'Other workers still running - loop back to this plugin',
+        },
     ],
 }); };
 exports.details = details;
 // Spawns a platform-specific process that prevents system sleep.
 // Returns a cleanup function to stop it.
-var startSleepPrevention = function (platform, childProcess, 
+var startSleepPrevention = function (platform, childProcess,
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 jobLog) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -162,7 +166,7 @@ jobLog) {
     return function () { };
 };
 var plugin = function (args) { return __awaiter(void 0, void 0, void 0, function () {
-    var lib, childProcess, pollInterval, stopSleepPrevention, confirmCount;
+    var lib, childProcess, pollInterval, confirmCount, stopSleepPrevention, confirmedCount, othersRunning;
     return __generator(this, function (_a) {
         switch (_a.label) {
             case 0:
@@ -171,36 +175,48 @@ var plugin = function (args) { return __awaiter(void 0, void 0, void 0, function
                 args.inputs = lib.loadDefaultValues(args.inputs, details);
                 childProcess = require('child_process');
                 pollInterval = Math.max(10, Number(args.inputs.pollIntervalSeconds) || 15) * 1000;
-                args.jobLog('Starting sleep prevention loop');
-                stopSleepPrevention = startSleepPrevention(args.platform, childProcess, args.jobLog);
                 confirmCount = 3;
+                stopSleepPrevention = startSleepPrevention(args.platform, childProcess, args.jobLog);
+                confirmedCount = Number(args.variables.confirmedCount) || 0;
                 _a.label = 1;
             case 1:
-                _a.trys.push([1, , 3, 4]);
-                return [4 /*yield*/, (0, automationUtils_1.pollUntilConfirmed)(args, pollInterval, confirmCount, function (firstCheck) { return __awaiter(void 0, void 0, void 0, function () {
-                        var othersRunning;
-                        return __generator(this, function (_a) {
-                            switch (_a.label) {
-                                case 0: return [4 /*yield*/, (0, automationUtils_1.checkOtherWorkersRunning)(args, firstCheck)];
-                                case 1:
-                                    othersRunning = _a.sent();
-                                    if (othersRunning === 'error')
-                                        return [2 /*return*/, 'error'];
-                                    return [2 /*return*/, !othersRunning];
-                            }
-                        });
-                    }); }, "No other workers running (confirmed ".concat(confirmCount, " times), stopping sleep prevention"))];
+                _a.trys.push([1, , 4, 5]);
+                return [4 /*yield*/, new Promise(function (resolve) { return setTimeout(resolve, pollInterval); })];
             case 2:
                 _a.sent();
-                return [3 /*break*/, 4];
+                args.updateWorker({ percentage: confirmedCount });
+                return [4 /*yield*/, (0, automationUtils_1.checkOtherWorkersRunning)(args, true)];
             case 3:
+                othersRunning = _a.sent();
+                if (othersRunning === 'error') {
+                    args.jobLog('Error checking workers, resetting confirmation count');
+                    confirmedCount = 0;
+                }
+                else if (othersRunning) {
+                    args.jobLog("Other workers still running (".concat(confirmedCount, "/3), looping"));
+                    confirmedCount = 0;
+                }
+                else {
+                    confirmedCount += 1;
+                    args.jobLog("No other workers (".concat(confirmedCount, "/").concat(confirmCount, ")"));
+                }
+                if (confirmedCount >= confirmCount) {
+                    args.jobLog("No other workers running (confirmed ".concat(confirmCount, " times), continuing"));
+                    return [2 /*return*/, {
+                            outputFileObj: args.inputFileObj,
+                            outputNumber: 1,
+                            variables: Object.assign(Object.assign({}, args.variables), { confirmedCount: 0 }),
+                        }];
+                }
+                return [2 /*return*/, {
+                        outputFileObj: args.inputFileObj,
+                        outputNumber: 2,
+                        variables: Object.assign(Object.assign({}, args.variables), { confirmedCount: confirmedCount }),
+                    }];
+            case 4:
                 stopSleepPrevention();
                 return [7 /*endfinally*/];
-            case 4: return [2 /*return*/, {
-                    outputFileObj: args.inputFileObj,
-                    outputNumber: 1,
-                    variables: args.variables,
-                }];
+            case 5: return [2 /*return*/];
         }
     });
 }); };

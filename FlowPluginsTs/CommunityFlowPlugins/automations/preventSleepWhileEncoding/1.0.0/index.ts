@@ -5,16 +5,15 @@ import {
 } from '../../../../FlowHelpers/1.0.0/interfaces/interfaces';
 import {
   checkOtherWorkersRunning,
-  pollUntilConfirmed,
 } from '../../../../FlowHelpers/1.0.0/automationUtils';
 
 /* eslint no-plusplus: ["error", { "allowForLoopAfterthoughts": true }] */
 
 const details = (): IpluginDetails => ({
   name: 'Prevent Sleep While Encoding',
-  description: 'Loops while other workers on this node are active, preventing the system from sleeping.'
-    + ' Bumps worker percentage each iteration. Exits when no other workers are running'
-    + ' (confirmed 3 times in a row).',
+  description: 'Prevents system sleep while other workers are active.'
+    + ' Output 1: no other workers running. Output 2: other workers still running'
+    + ' (flow should loop output 2 back to this plugin).',
   style: {
     borderColor: '#FF9800',
   },
@@ -33,13 +32,17 @@ const details = (): IpluginDetails => ({
       inputUI: {
         type: 'text',
       },
-      tooltip: 'How often to check if other workers are still running.',
+      tooltip: 'How long to wait between checks.',
     },
   ],
   outputs: [
     {
       number: 1,
       tooltip: 'No other workers running - safe to continue',
+    },
+    {
+      number: 2,
+      tooltip: 'Other workers still running - loop back to this plugin',
     },
   ],
 });
@@ -156,33 +159,47 @@ const plugin = async (args: IpluginInputArgs): Promise<IpluginOutputArgs> => {
 
   const childProcess = require('child_process');
   const pollInterval = Math.max(10, Number(args.inputs.pollIntervalSeconds) || 15) * 1000;
-
-  args.jobLog('Starting sleep prevention loop');
-  const stopSleepPrevention = startSleepPrevention(args.platform, childProcess, args.jobLog);
-
   const confirmCount = 3;
 
+  const stopSleepPrevention = startSleepPrevention(args.platform, childProcess, args.jobLog);
+
+  let confirmedCount = Number(args.variables.confirmedCount) || 0;
+
   try {
-    await pollUntilConfirmed(
-      args,
-      pollInterval,
-      confirmCount,
-      async (firstCheck) => {
-        const othersRunning = await checkOtherWorkersRunning(args, firstCheck);
-        if (othersRunning === 'error') return 'error';
-        return !othersRunning;
-      },
-      `No other workers running (confirmed ${confirmCount} times), stopping sleep prevention`,
-    );
+    await new Promise((resolve) => setTimeout(resolve, pollInterval));
+
+    args.updateWorker({ percentage: confirmedCount });
+
+    const othersRunning = await checkOtherWorkersRunning(args, true);
+
+    if (othersRunning === 'error') {
+      args.jobLog('Error checking workers, resetting confirmation count');
+      confirmedCount = 0;
+    } else if (othersRunning) {
+      args.jobLog(`Other workers still running (${confirmedCount}/3), looping`);
+      confirmedCount = 0;
+    } else {
+      confirmedCount += 1;
+      args.jobLog(`No other workers (${confirmedCount}/${confirmCount})`);
+    }
+
+    if (confirmedCount >= confirmCount) {
+      args.jobLog(`No other workers running (confirmed ${confirmCount} times), continuing`);
+      return {
+        outputFileObj: args.inputFileObj,
+        outputNumber: 1,
+        variables: { ...args.variables, confirmedCount: 0 },
+      };
+    }
+
+    return {
+      outputFileObj: args.inputFileObj,
+      outputNumber: 2,
+      variables: { ...args.variables, confirmedCount },
+    };
   } finally {
     stopSleepPrevention();
   }
-
-  return {
-    outputFileObj: args.inputFileObj,
-    outputNumber: 1,
-    variables: args.variables,
-  };
 };
 
 export {
