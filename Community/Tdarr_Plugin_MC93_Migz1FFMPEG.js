@@ -374,22 +374,22 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
 
   // Detect PGS subtitle streams that FFmpeg may detect as "data" type.
   // Some .ts files have PGS streams with codec_tag "[6][0][0][0]" that FFmpeg
-  // doesn't recognize as subtitles. Map them explicitly with hdmv_pgs_subtitle codec.
-  let pgsStreamMap = '';
+  // doesn't recognize as subtitles. Build stream-specific codec overrides.
+  let pgsStreamOverrides = '';
   for (let i = 0; i < file.ffProbeData.streams.length; i++) {
     try {
       const stream = file.ffProbeData.streams[i];
       const codecTag = stream.codec_tag_string || '';
       const codecName = stream.codec_name || '';
       if (codecTag === '[6][0][0][0]' || (codecName === 'bin_data' && codecTag === '0x0006')) {
-        pgsStreamMap += `-c:s:${i} hdmv_pgs_subtitle `;
+        pgsStreamOverrides += `-c:s:${i} hdmv_pgs_subtitle `;
       }
     } catch (err) {
       // Error
     }
   }
-  if (pgsStreamMap) {
-    response.infoLog += `PGS subtitle streams detected, forcing hdmv_pgs_subtitle codec.\n`;
+  if (pgsStreamOverrides) {
+    response.infoLog += `PGS subtitle streams detected, using hdmv_pgs_subtitle codec.\n`;
   }
 
   // Use modern CUDA hwaccel instead of legacy *_cuvid decoders
@@ -398,9 +398,10 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   const { getNvdecHwaccelPreset } = require('../methods/nvdecPreset');
   response.preset = getNvdecHwaccelPreset(file, nvdecOptions);
 
+  const subtitleCodec = pgsStreamOverrides ? `${pgsStreamOverrides}-c:s copy ` : '-c:s copy ';
   response.preset +=
     `${genpts}, -map 0 -c:v hevc_nvenc -cq:v 19 ${bitrateSettings} ` +
-    `-spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy -c:s copy ${pgsStreamMap}-max_muxing_queue_size 9999 ${extraArguments}`;
+    `-spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy ${subtitleCodec}-max_muxing_queue_size 9999 ${extraArguments}`;
   response.processFile = true;
   // if (forceTranscode === true) {
   //   response.infoLog += `Bitrate ${currentBitrate}k is above max ${inputs.max_bitrate}k. Forcing transcode to hevc. \n`;
