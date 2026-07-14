@@ -279,6 +279,7 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   if (inputs.enable_10bit === true) {
     const { getNvenc10BitFormatArg } = require('../methods/nvdecPreset');
     extraArguments += getNvenc10BitFormatArg(file, nvdecOptions);
+    extraArguments += "-profile:v main10 ";
   }
 
   // Check if b frame variable is true.
@@ -371,17 +372,35 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   response.infoLog += `Minimum = ${minimumBitrate} \n`;
   response.infoLog += `Maximum = ${maximumBitrate} \n`;
 
+  // Detect PGS subtitle streams that FFmpeg may detect as "data" type.
+  // Some .ts files have PGS streams with codec_tag "[6][0][0][0]" that FFmpeg
+  // doesn't recognize as subtitles. Map them explicitly with hdmv_pgs_subtitle codec.
+  let pgsStreamMap = '';
+  for (let i = 0; i < file.ffProbeData.streams.length; i++) {
+    try {
+      const stream = file.ffProbeData.streams[i];
+      const codecTag = stream.codec_tag_string || '';
+      const codecName = stream.codec_name || '';
+      if (codecTag === '[6][0][0][0]' || (codecName === 'bin_data' && codecTag === '0x0006')) {
+        pgsStreamMap += `-c:s:${i} hdmv_pgs_subtitle `;
+      }
+    } catch (err) {
+      // Error
+    }
+  }
+  if (pgsStreamMap) {
+    response.infoLog += `PGS subtitle streams detected, forcing hdmv_pgs_subtitle codec.\n`;
+  }
+
   // Use modern CUDA hwaccel instead of legacy *_cuvid decoders
   // which cause frame-ordering issues (stuttering) with FFmpeg 7+.
   // Helper returns '' for AV1 to keep older GPUs on software decode.
-  // When enable_10bit + force_conform are both enabled, use softwareFrames
-  // to avoid GPU frame format conflicts with the pixel format conversion.
   const { getNvdecHwaccelPreset } = require('../methods/nvdecPreset');
   response.preset = getNvdecHwaccelPreset(file, nvdecOptions);
 
   response.preset +=
     `${genpts}, -map 0 -c:v hevc_nvenc -cq:v 19 ${bitrateSettings} ` +
-    `-spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy -c:s copy -max_muxing_queue_size 9999 ${extraArguments}`;
+    `-spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy -c:s copy ${pgsStreamMap}-max_muxing_queue_size 9999 ${extraArguments}`;
   response.processFile = true;
   // if (forceTranscode === true) {
   //   response.infoLog += `Bitrate ${currentBitrate}k is above max ${inputs.max_bitrate}k. Forcing transcode to hevc. \n`;
