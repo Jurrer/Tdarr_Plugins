@@ -238,7 +238,7 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   if (convert === true) {
     response.processFile = true;
     response.preset =
-      `, -map 0 -c copy -c:s copy ${ffmpegCommandInsert} ` +
+      `, -map 0 -c copy ${ffmpegCommandInsert} ` +
       "-strict -2 -max_muxing_queue_size 9999 ";
   } else {
     response.infoLog += "☑File contains all required audio formats. \n";
