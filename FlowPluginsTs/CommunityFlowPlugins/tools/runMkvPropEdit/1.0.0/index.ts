@@ -1,15 +1,9 @@
 import { CLI } from '../../../../FlowHelpers/1.0.0/cliUtils';
 import {
-  getContainer,
-  getFileName,
-  getPluginWorkDir,
-} from '../../../../FlowHelpers/1.0.0/fileUtils';
-import {
   IpluginDetails,
   IpluginInputArgs,
   IpluginOutputArgs,
 } from '../../../../FlowHelpers/1.0.0/interfaces/interfaces';
-import * as fs from 'fs/promises';
 
 /* eslint no-plusplus: ["error", { "allowForLoopAfterthoughts": true }] */
 const details = ():IpluginDetails => ({
@@ -40,13 +34,9 @@ const plugin = async (args:IpluginInputArgs):Promise<IpluginOutputArgs> => {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars,no-param-reassign
   args.inputs = lib.loadDefaultValues(args.inputs, details);
 
-  const container = getContainer(args.inputFileObj._id);
-  const tempFilePath = `${getPluginWorkDir(args)}/${getFileName(args.inputFileObj._id)}.${container}`;
-  await fs.copyFile(args.inputFileObj._id, tempFilePath);
-
   const cliArgs = [
     '--add-track-statistics-tags',
-    tempFilePath,
+    args.inputFileObj._id,
   ];
 
   const cli = new CLI({
@@ -54,7 +44,7 @@ const plugin = async (args:IpluginInputArgs):Promise<IpluginOutputArgs> => {
     spawnArgs: cliArgs,
     spawnOpts: {},
     jobLog: args.jobLog,
-    outputFilePath: tempFilePath,
+    outputFilePath: '',
     inputFileObj: args.inputFileObj,
     logFullCliOutput: args.logFullCliOutput,
     updateWorker: args.updateWorker,
@@ -63,15 +53,15 @@ const plugin = async (args:IpluginInputArgs):Promise<IpluginOutputArgs> => {
 
   const res = await cli.runCli();
 
-  if (res.cliExitCode !== 0) {
+  if (res.cliExitCode === 1 && !cli.cancelled) {
+    args.jobLog('MKVPropEdit completed with warnings');
+  } else if (res.cliExitCode !== 0) {
     args.jobLog('Running MKVPropEdit failed');
     throw new Error('Running MKVPropEdit failed');
   }
 
   return {
-    outputFileObj: {
-      _id: tempFilePath,
-    },
+    outputFileObj: args.inputFileObj,
     outputNumber: 1,
     variables: args.variables,
   };

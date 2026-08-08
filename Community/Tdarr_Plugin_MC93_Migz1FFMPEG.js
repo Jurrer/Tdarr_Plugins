@@ -10,7 +10,7 @@ const details = () => ({
                   Working by the logic that H265 can support the same ammount of data at half the bitrate of H264.
                   NVDEC & NVENC compatable GPU required.
                   This plugin will skip any files that are in the VP9 codec.`,
-  Version: "3.1",
+  Version: "3.2-custom",
   Tags: "pre-processing,ffmpeg,video only,nvenc h265,configurable",
   Inputs: [
     {
@@ -73,6 +73,22 @@ const details = () => ({
         options: ["false", "true"],
       },
       tooltip: `Specify if output file should be 10bit. Default is false.
+                    \\nExample:\\n
+                    true
+
+                    \\nExample:\\n
+                    false`,
+    },
+    {
+      name: "enable_full_gpu_10bit",
+      type: "boolean",
+      defaultValue: false,
+      inputUI: {
+        type: "dropdown",
+        options: ["false", "true"],
+      },
+      tooltip: `Use full GPU 10-bit conversion with scale_cuda. May fail on files affected by CUDA filter graph issues.
+                    Default is false.
                     \\nExample:\\n
                     true
 
@@ -268,24 +284,18 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     }
   }
 
-  // Check if 10bit variable is true.
-  // When force_conform is enabled, the filter chain may contain additional
-  // filters that don't work with GPU frames. Use softwareFrames to force
-  // CPU-based pixel format conversion instead of scale_cuda.
-  const nvdecOptions = inputs.enable_10bit === true && inputs.force_conform === true
+  const {
+    getNvdecHwaccelPreset,
+    getNvenc10BitFormatArg,
+  } = require('../methods/nvdecPreset');
+  // scale_cuda-based full-GPU 10bit can fail on files/filter chains affected by
+  // CUDA filter graph issues, so default to softwareFrames unless the user
+  // opts into enable_full_gpu_10bit.
+  const useSoftwareFramesFor10Bit = inputs.enable_10bit === true
+    && inputs.enable_full_gpu_10bit === false;
+  const nvdecOptions = useSoftwareFramesFor10Bit
     ? { softwareFrames: true }
-    : {};
-
-  if (inputs.enable_10bit === true) {
-    const { getNvenc10BitFormatArg } = require('../methods/nvdecPreset');
-    extraArguments += getNvenc10BitFormatArg(file, nvdecOptions);
-  }
-
-  // Check if b frame variable is true.
-  if (inputs.enable_bframes === true) {
-    // If set to true then add b frames argument
-    extraArguments += "-bf 5 ";
-  }
+    : undefined;
 
   // Go through each stream in the file.
   for (let i = 0; i < file.ffProbeData.streams.length; i++) {
@@ -328,13 +338,8 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
             file.ffProbeData.streams[i].codec_name === "vp9") &&
           file.container !== inputs.container
         ) {
-          if (belowCutoff) {
-            response.infoLog += `Codec is ${file.ffProbeData.streams[i].codec_name} but container mismatch (current: ${file.container}, wanted: ${inputs.container}). Remuxing only. \n`;
-            response.preset = `, -map 0 -c copy ${extraArguments}`;
-          } else {
-            response.infoLog += `Codec is ${file.ffProbeData.streams[i].codec_name} but container mismatch (current: ${file.container}, wanted: ${inputs.container}). Remuxing. \n`;
-            response.preset = `, -map 0 -c copy ${extraArguments}`;
-          }
+          response.infoLog += `Codec is ${file.ffProbeData.streams[i].codec_name} but container mismatch (current: ${file.container}, wanted: ${inputs.container}). Remuxing. \n`;
+          response.preset = `, -map 0 -c copy ${extraArguments}`;
           response.processFile = true;
           return response;
         }
@@ -359,6 +364,19 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     }
   }
 
+  // Keep encoder/filter args out of remux commands; FFmpeg cannot combine them with `-c copy`.
+  let transcodeOnlyArguments = "";
+  // Check if 10bit variable is true.
+  if (inputs.enable_10bit === true) {
+    transcodeOnlyArguments += getNvenc10BitFormatArg(file, nvdecOptions);
+  }
+
+  // Check if b frame variable is true.
+  if (inputs.enable_bframes === true) {
+    // If set to true then add b frames argument
+    transcodeOnlyArguments += "-bf 5 ";
+  }
+
   // Set bitrateSettings variable using bitrate information calulcated earlier.
   bitrateSettings =
     `-b:v ${targetBitrate}k -minrate ${minimumBitrate}k ` +
@@ -374,20 +392,18 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   // Use modern CUDA hwaccel instead of legacy *_cuvid decoders
   // which cause frame-ordering issues (stuttering) with FFmpeg 7+.
   // Helper returns '' for AV1 to keep older GPUs on software decode.
-  // When enable_10bit + force_conform are both enabled, use softwareFrames
-  // to avoid GPU frame format conflicts with the pixel format conversion.
-  const { getNvdecHwaccelPreset } = require('../methods/nvdecPreset');
   response.preset = getNvdecHwaccelPreset(file, nvdecOptions);
 
+  const outputArguments = `${extraArguments}${transcodeOnlyArguments}`;
   response.preset +=
     `${genpts}, -map 0 -c:v hevc_nvenc -cq:v 19 ${bitrateSettings} ` +
-    `-spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy -c:s copy -max_muxing_queue_size 9999 ${extraArguments}`;
+    `-spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy -c:s copy -max_muxing_queue_size 9999 ${outputArguments}`;
   response.processFile = true;
-  // if (forceTranscode === true) {
-  //   response.infoLog += `Bitrate ${currentBitrate}k is above max ${inputs.max_bitrate}k. Forcing transcode to hevc. \n`;
-  // } else {
-  //   response.infoLog += `Codec is ${file.video_codec_name} (not hevc/vp9) and bitrate ${currentBitrate}k is above cutoff ${inputs.bitrate_cutoff}k. Transcoding to hevc. \n`;
-  // }
+  if (forceTranscode === true) {
+    response.infoLog += `Bitrate ${currentBitrate}k is above max ${inputs.max_bitrate}k. Forcing transcode to hevc. \n`;
+  } else {
+    response.infoLog += `Codec is not hevc/vp9 and bitrate ${currentBitrate}k is above cutoff. Transcoding to hevc. \n`;
+  }
   return response;
 };
 module.exports.details = details;

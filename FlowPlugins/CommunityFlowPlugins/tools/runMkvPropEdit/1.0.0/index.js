@@ -38,8 +38,6 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.plugin = exports.details = void 0;
 var cliUtils_1 = require("../../../../FlowHelpers/1.0.0/cliUtils");
-var fileUtils_1 = require("../../../../FlowHelpers/1.0.0/fileUtils");
-var fsSync = require("fs");
 /* eslint no-plusplus: ["error", { "allowForLoopAfterthoughts": true }] */
 var details = function () { return ({
     name: 'Run MKVPropEdit',
@@ -65,26 +63,23 @@ var details = function () { return ({
 exports.details = details;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 var plugin = function (args) { return __awaiter(void 0, void 0, void 0, function () {
-    var lib, container, tempFilePath, cliArgs, cli, res;
+    var lib, cliArgs, cli, res;
     return __generator(this, function (_a) {
         switch (_a.label) {
             case 0:
                 lib = require('../../../../../methods/lib')();
                 // eslint-disable-next-line @typescript-eslint/no-unused-vars,no-param-reassign
                 args.inputs = lib.loadDefaultValues(args.inputs, details);
-                container = (0, fileUtils_1.getContainer)(args.inputFileObj._id);
-                tempFilePath = "".concat((0, fileUtils_1.getPluginWorkDir)(args), "/").concat((0, fileUtils_1.getFileName)(args.inputFileObj._id), ".").concat(container);
-                fsSync.copyFileSync(args.inputFileObj._id, tempFilePath);
                 cliArgs = [
                     '--add-track-statistics-tags',
-                    tempFilePath,
+                    args.inputFileObj._id,
                 ];
                 cli = new cliUtils_1.CLI({
                     cli: args.mkvpropeditPath,
                     spawnArgs: cliArgs,
                     spawnOpts: {},
                     jobLog: args.jobLog,
-                    outputFilePath: tempFilePath,
+                    outputFilePath: '',
                     inputFileObj: args.inputFileObj,
                     logFullCliOutput: args.logFullCliOutput,
                     updateWorker: args.updateWorker,
@@ -93,14 +88,15 @@ var plugin = function (args) { return __awaiter(void 0, void 0, void 0, function
                 return [4 /*yield*/, cli.runCli()];
             case 1:
                 res = _a.sent();
-                if (res.cliExitCode !== 0) {
+                if (res.cliExitCode === 1 && !cli.cancelled) {
+                    args.jobLog('MKVPropEdit completed with warnings');
+                }
+                else if (res.cliExitCode !== 0) {
                     args.jobLog('Running MKVPropEdit failed');
                     throw new Error('Running MKVPropEdit failed');
                 }
                 return [2 /*return*/, {
-                        outputFileObj: {
-                            _id: tempFilePath,
-                        },
+                        outputFileObj: args.inputFileObj,
                         outputNumber: 1,
                         variables: args.variables,
                     }];

@@ -7,7 +7,7 @@ const details = () => ({
   Operation: "Transcode",
   Description:
     "This plugin can convert all audio tracks to opus and can create downmixed audio tracks. \n\n",
-  Version: "2.5",
+  Version: "2.6-custom",
   Tags: "pre-processing,ffmpeg,audio only,configurable",
   Inputs: [
     {
@@ -57,7 +57,7 @@ const details = () => ({
         " Enable this option to only downmix a single track.",
     },
     {
-      name: "remove_original",
+      name: "preserve_channel_title",
       type: "boolean",
       defaultValue: false,
       inputUI: {
@@ -65,8 +65,9 @@ const details = () => ({
         options: ["false", "true"],
       },
       tooltip:
-        "Remove the original audio track after creating the downmixed version." +
-        " Only applies when downmix is enabled.",
+        "Specify whether downmixed tracks should preserve the original track title." +
+        " \\nWhen false (default), downmixed tracks use only the new channel layout as the title (e.g. \"2.0\")." +
+        " \\nWhen true, the plugin appends the new layout to the original title (e.g. \"E-AC-3 Atmos 5.1 - 2.0\").",
     },
   ],
 });
@@ -122,7 +123,10 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   let audioIdx = 0;
   let convert = false;
   let is2channelAdded = false;
-  const downmixedStreamIndices = [];
+  // Indices of streams downmixed in the loop below, so the opus-conversion
+  // pass can skip a track without recomputing (and potentially disagreeing
+  // with) the downmix eligibility check.
+  const downmixedIndices = [];
 
   // Go through each stream in the file.
   for (let i = 0; i < file.ffProbeData.streams.length; i++) {
@@ -136,67 +140,25 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
       try {
         // Check if inputs.downmix is set to true.
         if (inputs.downmix === true) {
-          // Check if file has 8 channel audio, create downmix from the 8 channel to 2 channel
-          if (
-            file.ffProbeData.streams[i].channels === 8 &&
-            (inputs.downmix_single_track === false ||
-              (inputs.downmix_single_track === true &&
-                is2channelAdded === false))
-          ) {
-            let lang = language;
-            ffmpegCommandInsert += `-c:a:${audioIdx} libopus -ac 2 `;
-            if (lang) {
-              ffmpegCommandInsert += `-metadata:s:a:${audioIdx} language=${lang} `;
-            }
-            response.infoLog +=
-              "☒Audio track is 8 channel. Creating 2 channel from 8 channel. \n";
-            convert = true;
-            is2channelAdded = true;
-            if (inputs.remove_original === true) {
-              downmixedStreamIndices.push(i);
-            }
-          }
-          // Check if file has 6 channel audio, create downmix from the 6 channel.
-          if (
-            file.ffProbeData.streams[i].channels === 6 &&
-            (inputs.downmix_single_track === false ||
-              (inputs.downmix_single_track === true &&
-                is2channelAdded === false))
-          ) {
-            let lang = language;
-            ffmpegCommandInsert += `-c:a:${audioIdx} libopus -ac 2 `;
-            if (lang) {
-              ffmpegCommandInsert += `-metadata:s:a:${audioIdx} language=${lang} `;
-            }
-            response.infoLog +=
-              "☒Audio track is 6 channel. Creating 2 channel from 6 channel. \n";
-            convert = true;
-            is2channelAdded = true;
-            if (inputs.remove_original === true) {
-              downmixedStreamIndices.push(i);
-            }
-          }
-          // Check if audio track has more than 2 channels (but not 6 or 8, which are handled above), downmix to 2 channels
+          // Downmix any track with more than 2 channels to stereo.
           if (
             file.ffProbeData.streams[i].channels > 2 &&
-            file.ffProbeData.streams[i].channels !== 6 &&
-            file.ffProbeData.streams[i].channels !== 8 &&
             (inputs.downmix_single_track === false ||
               (inputs.downmix_single_track === true &&
                 is2channelAdded === false))
           ) {
-            let lang = file.ffProbeData.streams[i].tags?.language || "";
+            const newTitle = inputs.preserve_channel_title
+              ? buildDownmixTitle(originalTitle, "2.0") : "2.0";
             ffmpegCommandInsert += `-c:a:${audioIdx} libopus -ac 2 `;
-            if (lang) {
-              ffmpegCommandInsert += `-metadata:s:a:${audioIdx} language=${lang} `;
+            ffmpegCommandInsert += `-metadata:s:a:${audioIdx} "title=${newTitle}" `;
+            if (language) {
+              ffmpegCommandInsert += `-metadata:s:a:${audioIdx} "language=${language}" `;
             }
             response.infoLog +=
-              `☒Audio track is ${file.ffProbeData.streams[i].channels} channel. Creating 2 channel. \n`;
+              `☒Audio track is ${file.ffProbeData.streams[i].channels} channel. Creating 2 channel "${newTitle}" from ${file.ffProbeData.streams[i].channels} channel. \n`;
             convert = true;
             is2channelAdded = true;
-            if (inputs.remove_original === true) {
-              downmixedStreamIndices.push(i);
-            }
+            downmixedIndices.push(i);
           }
         }
       } catch (err) {
@@ -208,19 +170,14 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
         // Check if inputs.convert_all_to_opus is set to true.
         if (inputs.convert_all_to_opus === true) {
           // Check if codec_name for stream is NOT opus.
-          // Skip if downmix will handle this track (6/8ch with downmix enabled)
-          const isDownmixTrack =
-            inputs.downmix === true &&
-            (file.ffProbeData.streams[i].channels === 6 ||
-              file.ffProbeData.streams[i].channels === 8 ||
-              (file.ffProbeData.streams[i].channels > 2 &&
-                file.ffProbeData.streams[i].channels !== 6 &&
-                file.ffProbeData.streams[i].channels !== 8));
+          // Skip if this track was already downmixed above, whether or not
+          // it actually happened to be a downmix candidate on this pass -
+          // downmixedIndices reflects what downmix_single_track actually did.
+          const isDownmixTrack = downmixedIndices.includes(i);
           if (file.ffProbeData.streams[i].codec_name !== "opus" && !isDownmixTrack) {
-            let lang = file.ffProbeData.streams[i].tags?.language || "";
             ffmpegCommandInsert += `-c:a:${audioIdx} libopus `;
-            if (lang) {
-              ffmpegCommandInsert += `-metadata:s:a:${audioIdx} language=${lang} `;
+            if (language) {
+              ffmpegCommandInsert += `-metadata:s:a:${audioIdx} "language=${language}" `;
             }
             response.infoLog +=
               `☒Audio track is ${file.ffProbeData.streams[i].channels} channel but is not opus. Converting. \n`;

@@ -3,6 +3,7 @@ const _ = require('lodash');
 const run = require('../helpers/run');
 
 const tests = [
+  // Both convert_all_to_opus and downmix left at their (false) defaults - nothing to do.
   {
     input: {
       file: _.cloneDeep(require('../sampleData/media/sampleH264_1.json')),
@@ -20,30 +21,35 @@ const tests = [
     },
   },
 
+  // convert_all_to_opus has no channel restriction (unlike upstream's aac_stereo) -
+  // a 6 channel AAC track still gets converted to opus.
   {
     input: {
       file: _.cloneDeep(require('../sampleData/media/sampleH264_1.json')),
       librarySettings: {},
       inputs: {
-        aac_stereo: 'true',
+        convert_all_to_opus: 'true',
       },
       otherArguments: {},
     },
     output: {
-      processFile: false,
+      processFile: true,
       container: '.mp4',
       handBrakeMode: false,
       FFmpegMode: true,
       reQueueAfter: true,
-      infoLog: '☑File contains all required audio formats. \n',
+      infoLog: '☒Audio track is 6 channel but is not opus. Converting. \n',
+      preset: ', -map 0 -c copy -c:a:0 libopus -metadata:s:a:0 "language=und"  -strict -2 -max_muxing_queue_size 9999 ',
     },
   },
+
+  // convert_all_to_opus converts every non-opus track (flac/ac3/eac3/aac), regardless of codec.
   {
     input: {
       file: _.cloneDeep(require('../sampleData/media/sampleH264_2.json')),
       librarySettings: {},
       inputs: {
-        aac_stereo: 'true',
+        convert_all_to_opus: 'true',
       },
       otherArguments: {},
     },
@@ -53,15 +59,47 @@ const tests = [
       handBrakeMode: false,
       FFmpegMode: true,
       reQueueAfter: true,
-      infoLog: '☒Audio track is 2 channel but is not AAC. Converting. \n'
-        + '☒Audio track is 2 channel but is not AAC. Converting. \n'
-        + '☒Audio track is 2 channel but is not AAC. Converting. \n',
-      preset: ', -map 0 -c:v copy -c:a copy -c:a:0 aac -c:a:1 aac -c:a:2 aac  -strict -2 -c:s copy -max_muxing_queue_size 9999 ',
+      infoLog: '☒Audio track is 2 channel but is not opus. Converting. \n'
+        + '☒Audio track is 2 channel but is not opus. Converting. \n'
+        + '☒Audio track is 2 channel but is not opus. Converting. \n'
+        + '☒Audio track is 2 channel but is not opus. Converting. \n'
+        + '☒Audio track is 2 channel but is not opus. Converting. \n',
+      preset: ', -map 0 -c copy -c:a:0 libopus -metadata:s:a:0 "language=eng" -c:a:1 libopus -metadata:s:a:1 "language=eng" -c:a:2 libopus -metadata:s:a:2 "language=eng" -c:a:3 libopus -metadata:s:a:3 "language=fre" -c:a:4 libopus -metadata:s:a:4 "language=eng"  -strict -2 -max_muxing_queue_size 9999 ',
     },
   },
 
-  // --- preserve_channel_title: false (default) - uses simple layout titles ---
+  // Language metadata is only emitted when the source stream actually has a language tag.
+  {
+    input: {
+      file: (() => {
+        const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
+        delete file.ffProbeData.streams[4].tags.language;
+        return file;
+      })(),
+      librarySettings: {},
+      inputs: {
+        convert_all_to_opus: 'true',
+      },
+      otherArguments: {},
+    },
+    output: {
+      processFile: true,
+      container: '.mkv',
+      handBrakeMode: false,
+      FFmpegMode: true,
+      reQueueAfter: true,
+      infoLog: '☒Audio track is 2 channel but is not opus. Converting. \n'
+        + '☒Audio track is 2 channel but is not opus. Converting. \n'
+        + '☒Audio track is 2 channel but is not opus. Converting. \n'
+        + '☒Audio track is 2 channel but is not opus. Converting. \n'
+        + '☒Audio track is 2 channel but is not opus. Converting. \n',
+      preset: ', -map 0 -c copy -c:a:0 libopus -metadata:s:a:0 "language=eng" -c:a:1 libopus -metadata:s:a:1 "language=eng" -c:a:2 libopus -metadata:s:a:2 "language=eng" -c:a:3 libopus -c:a:4 libopus -metadata:s:a:4 "language=eng"  -strict -2 -max_muxing_queue_size 9999 ',
+    },
+  },
 
+  // --- downmix: replace-in-place, straight to stereo, preserve_channel_title: false (default) ---
+
+  // Single >2ch track downmixes to stereo.
   {
     input: {
       file: (() => {
@@ -71,7 +109,6 @@ const tests = [
       })(),
       librarySettings: {},
       inputs: {
-        aac_stereo: 'false',
         downmix: 'true',
       },
       otherArguments: {},
@@ -82,11 +119,12 @@ const tests = [
       handBrakeMode: false,
       FFmpegMode: true,
       reQueueAfter: true,
-      infoLog: '☒Audio track is 8 channel, no 6 channel exists. Creating 6 channel "5.1" from 8 channel. \n',
-      preset: ', -map 0 -c:v copy -c:a copy -map 0:1 -c:a:0 ac3 -ac 6 -metadata:s:a:0 "title=5.1" -metadata:s:a:0 "language=eng"  -strict -2 -c:s copy -max_muxing_queue_size 9999 ',
+      infoLog: '☒Audio track is 8 channel. Creating 2 channel "2.0" from 8 channel. \n',
+      preset: ', -map 0 -c copy -c:a:0 libopus -ac 2 -metadata:s:a:0 "title=2.0" -metadata:s:a:0 "language=eng"  -strict -2 -max_muxing_queue_size 9999 ',
     },
   },
 
+  // downmix_single_track: false (default) - every eligible track is downmixed independently.
   {
     input: {
       file: (() => {
@@ -97,7 +135,6 @@ const tests = [
       })(),
       librarySettings: {},
       inputs: {
-        aac_stereo: 'false',
         downmix: 'true',
       },
       otherArguments: {},
@@ -108,57 +145,24 @@ const tests = [
       handBrakeMode: false,
       FFmpegMode: true,
       reQueueAfter: true,
-      infoLog: '☒Audio track is 8 channel, no 6 channel exists. Creating 6 channel "5.1" from 8 channel. \n'
-        + '☒Audio track is 8 channel, no 6 channel exists. Creating 6 channel "5.1" from 8 channel. \n',
-      preset: ', -map 0 -c:v copy -c:a copy -map 0:1 -c:a:0 ac3 -ac 6 -metadata:s:a:0 "title=5.1" -metadata:s:a:0 "language=eng" -map 0:2 -c:a:1 ac3 -ac 6 -metadata:s:a:1 "title=5.1" -metadata:s:a:1 "language=eng"  -strict -2 -c:s copy -max_muxing_queue_size 9999 ',
+      infoLog: '☒Audio track is 8 channel. Creating 2 channel "2.0" from 8 channel. \n'
+        + '☒Audio track is 8 channel. Creating 2 channel "2.0" from 8 channel. \n',
+      preset: ', -map 0 -c copy -c:a:0 libopus -ac 2 -metadata:s:a:0 "title=2.0" -metadata:s:a:0 "language=eng" -c:a:1 libopus -ac 2 -metadata:s:a:1 "title=2.0" -metadata:s:a:1 "language=eng"  -strict -2 -max_muxing_queue_size 9999 ',
     },
   },
 
+  // downmix_single_track: true - only the first eligible track is downmixed, the second is left
+  // completely untouched (no downmix, and convert_all_to_opus is not set so no opus conversion).
   {
     input: {
       file: (() => {
         const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
         file.ffProbeData.streams[1].channels = 8;
         file.ffProbeData.streams[2].channels = 8;
-        file.ffProbeData.streams[3].channels = 6;
-        file.ffProbeData.streams[4].channels = 6;
-        file.ffProbeData.streams[5].channels = 6;
         return file;
       })(),
       librarySettings: {},
       inputs: {
-        aac_stereo: 'false',
-        downmix: 'true',
-      },
-      otherArguments: {},
-    },
-    output: {
-      processFile: true,
-      container: '.mkv',
-      handBrakeMode: false,
-      FFmpegMode: true,
-      reQueueAfter: true,
-      infoLog: '☒Audio track is 6 channel, no 2 channel exists. Creating 2 channel "2.0" from 6 channel. \n'
-      + '☒Audio track is 6 channel, no 2 channel exists. Creating 2 channel "2.0" from 6 channel. \n'
-      + '☒Audio track is 6 channel, no 2 channel exists. Creating 2 channel "2.0" from 6 channel. \n',
-      preset: ', -map 0 -c:v copy -c:a copy -map 0:3 -c:a:2 aac -ac 2 -metadata:s:a:2 "title=2.0" -metadata:s:a:2 "language=eng" -map 0:4 -c:a:3 aac -ac 2 -metadata:s:a:3 "title=2.0" -metadata:s:a:3 "language=fre" -map 0:5 -c:a:4 aac -ac 2 -metadata:s:a:4 "title=2.0" -metadata:s:a:4 "language=eng"  -strict -2 -c:s copy -max_muxing_queue_size 9999 ',
-    },
-  },
-
-  {
-    input: {
-      file: (() => {
-        const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
-        file.ffProbeData.streams[1].channels = 8;
-        file.ffProbeData.streams[2].channels = 8;
-        file.ffProbeData.streams[3].channels = 8;
-        file.ffProbeData.streams[4].channels = 6;
-        file.ffProbeData.streams[5].channels = 6;
-        return file;
-      })(),
-      librarySettings: {},
-      inputs: {
-        aac_stereo: 'false',
         downmix: 'true',
         downmix_single_track: 'true',
       },
@@ -170,62 +174,29 @@ const tests = [
       handBrakeMode: false,
       FFmpegMode: true,
       reQueueAfter: true,
-      infoLog: '☒Audio track is 6 channel, no 2 channel exists. Creating 2 channel "2.0" from 6 channel. \n',
-      preset: ', -map 0 -c:v copy -c:a copy -map 0:4 -c:a:3 aac -ac 2 -metadata:s:a:3 "title=2.0" -metadata:s:a:3 "language=fre"  -strict -2 -c:s copy -max_muxing_queue_size 9999 ',
+      infoLog: '☒Audio track is 8 channel. Creating 2 channel "2.0" from 8 channel. \n',
+      preset: ', -map 0 -c copy -c:a:0 libopus -ac 2 -metadata:s:a:0 "title=2.0" -metadata:s:a:0 "language=eng"  -strict -2 -max_muxing_queue_size 9999 ',
     },
   },
 
+  // Regression test for the double-skip bug: with downmix_single_track true and
+  // convert_all_to_opus true, the second 8ch track is skipped by the downmix gate
+  // (downmix_single_track already satisfied) but must still be caught by the opus pass -
+  // downmixedIndices (not a recomputed channel check) is what the opus pass consults. Every
+  // other non-downmixed track (including the untouched 2ch tracks) is opus-converted too.
   {
     input: {
       file: (() => {
         const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
         file.ffProbeData.streams[1].channels = 8;
         file.ffProbeData.streams[2].channels = 8;
-        file.ffProbeData.streams[3].channels = 8;
-        file.ffProbeData.streams[4].channels = 8;
-        file.ffProbeData.streams[5].channels = 8;
         return file;
       })(),
       librarySettings: {},
       inputs: {
-        aac_stereo: 'false',
-        downmix: 'true',
-        downmix_single_track: 'false',
-      },
-      otherArguments: {},
-    },
-    output: {
-      processFile: true,
-      container: '.mkv',
-      handBrakeMode: false,
-      FFmpegMode: true,
-      reQueueAfter: true,
-      infoLog: '☒Audio track is 8 channel, no 6 channel exists. Creating 6 channel "5.1" from 8 channel. \n'
-        + '☒Audio track is 8 channel, no 6 channel exists. Creating 6 channel "5.1" from 8 channel. \n'
-        + '☒Audio track is 8 channel, no 6 channel exists. Creating 6 channel "5.1" from 8 channel. \n'
-        + '☒Audio track is 8 channel, no 6 channel exists. Creating 6 channel "5.1" from 8 channel. \n'
-        + '☒Audio track is 8 channel, no 6 channel exists. Creating 6 channel "5.1" from 8 channel. \n',
-      preset: ', -map 0 -c:v copy -c:a copy -map 0:1 -c:a:0 ac3 -ac 6 -metadata:s:a:0 "title=5.1" -metadata:s:a:0 "language=eng" -map 0:2 -c:a:1 ac3 -ac 6 -metadata:s:a:1 "title=5.1" -metadata:s:a:1 "language=eng" -map 0:3 -c:a:2 ac3 -ac 6 -metadata:s:a:2 "title=5.1" -metadata:s:a:2 "language=eng" -map 0:4 -c:a:3 ac3 -ac 6 -metadata:s:a:3 "title=5.1" -metadata:s:a:3 "language=fre" -map 0:5 -c:a:4 ac3 -ac 6 -metadata:s:a:4 "title=5.1" -metadata:s:a:4 "language=eng"  -strict -2 -c:s copy -max_muxing_queue_size 9999 ',
-
-    },
-  },
-
-  {
-    input: {
-      file: (() => {
-        const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
-        file.ffProbeData.streams[1].channels = 8;
-        file.ffProbeData.streams[2].channels = 8;
-        file.ffProbeData.streams[3].channels = 8;
-        file.ffProbeData.streams[4].channels = 8;
-        file.ffProbeData.streams[5].channels = 8;
-        return file;
-      })(),
-      librarySettings: {},
-      inputs: {
-        aac_stereo: 'false',
         downmix: 'true',
         downmix_single_track: 'true',
+        convert_all_to_opus: 'true',
       },
       otherArguments: {},
     },
@@ -235,102 +206,19 @@ const tests = [
       handBrakeMode: false,
       FFmpegMode: true,
       reQueueAfter: true,
-      infoLog: '☒Audio track is 8 channel, no 6 channel exists. Creating 6 channel "5.1" from 8 channel. \n',
-      preset: ', -map 0 -c:v copy -c:a copy -map 0:1 -c:a:0 ac3 -ac 6 -metadata:s:a:0 "title=5.1" -metadata:s:a:0 "language=eng"  -strict -2 -c:s copy -max_muxing_queue_size 9999 ',
-    },
-  },
-  // DTS 6.1 (7 channel) - should downmix to 6ch (2ch created on requeue) - preserve_channel_title: false
-  {
-    input: {
-      file: (() => {
-        const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
-        file.ffProbeData.streams[1].channels = 7;
-        file.ffProbeData.streams[1].codec_name = 'dts';
-        return file;
-      })(),
-      librarySettings: {},
-      inputs: {
-        aac_stereo: 'false',
-        downmix: 'true',
-      },
-      otherArguments: {},
-    },
-    output: {
-      processFile: true,
-      container: '.mkv',
-      handBrakeMode: false,
-      FFmpegMode: true,
-      reQueueAfter: true,
-      infoLog: '☒Audio track is 7 channel (6.1), no 6 channel exists. Creating 6 channel "5.1" from 7 channel. \n',
-      preset: ', -map 0 -c:v copy -c:a copy -map 0:1 -c:a:0 ac3 -ac 6 -metadata:s:a:0 "title=5.1" -metadata:s:a:0 "language=eng"  -strict -2 -c:s copy -max_muxing_queue_size 9999 ',
+      infoLog: '☒Audio track is 8 channel. Creating 2 channel "2.0" from 8 channel. \n'
+        + '☒Audio track is 8 channel but is not opus. Converting. \n'
+        + '☒Audio track is 2 channel but is not opus. Converting. \n'
+        + '☒Audio track is 2 channel but is not opus. Converting. \n'
+        + '☒Audio track is 2 channel but is not opus. Converting. \n',
+      preset: ', -map 0 -c copy -c:a:0 libopus -ac 2 -metadata:s:a:0 "title=2.0" -metadata:s:a:0 "language=eng" -c:a:1 libopus -metadata:s:a:1 "language=eng" -c:a:2 libopus -metadata:s:a:2 "language=eng" -c:a:3 libopus -metadata:s:a:3 "language=fre" -c:a:4 libopus -metadata:s:a:4 "language=eng"  -strict -2 -max_muxing_queue_size 9999 ',
     },
   },
 
-  // DTS 6.1 (7 channel) with single track downmix - preserve_channel_title: false
-  {
-    input: {
-      file: (() => {
-        const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
-        file.ffProbeData.streams[1].channels = 7;
-        file.ffProbeData.streams[1].codec_name = 'dts';
-        return file;
-      })(),
-      librarySettings: {},
-      inputs: {
-        aac_stereo: 'false',
-        downmix: 'true',
-        downmix_single_track: 'true',
-      },
-      otherArguments: {},
-    },
-    output: {
-      processFile: true,
-      container: '.mkv',
-      handBrakeMode: false,
-      FFmpegMode: true,
-      reQueueAfter: true,
-      infoLog: '☒Audio track is 7 channel (6.1), no 6 channel exists. Creating 6 channel "5.1" from 7 channel. \n',
-      preset: ', -map 0 -c:v copy -c:a copy -map 0:1 -c:a:0 ac3 -ac 6 -metadata:s:a:0 "title=5.1" -metadata:s:a:0 "language=eng"  -strict -2 -c:s copy -max_muxing_queue_size 9999 ',
-    },
-  },
+  // --- preserve_channel_title: true - preserves original title in the downmix name ---
 
-  // DTS 6.1 (7 channel) with existing 6ch but no 2ch - preserve_channel_title: false
-  {
-    input: {
-      file: (() => {
-        const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
-        file.ffProbeData.streams[1].channels = 7;
-        file.ffProbeData.streams[1].codec_name = 'dts';
-        file.ffProbeData.streams[2].channels = 6;
-        file.ffProbeData.streams[3].channels = 6;
-        file.ffProbeData.streams[4].channels = 6;
-        file.ffProbeData.streams[5].channels = 6;
-        return file;
-      })(),
-      librarySettings: {},
-      inputs: {
-        aac_stereo: 'false',
-        downmix: 'true',
-      },
-      otherArguments: {},
-    },
-    output: {
-      processFile: true,
-      container: '.mkv',
-      handBrakeMode: false,
-      FFmpegMode: true,
-      reQueueAfter: true,
-      infoLog: '☒Audio track is 7 channel (6.1), no 2 channel exists. Creating 2 channel "2.0" from 7 channel. \n'
-        + '☒Audio track is 6 channel, no 2 channel exists. Creating 2 channel "2.0" from 6 channel. \n'
-        + '☒Audio track is 6 channel, no 2 channel exists. Creating 2 channel "2.0" from 6 channel. \n'
-        + '☒Audio track is 6 channel, no 2 channel exists. Creating 2 channel "2.0" from 6 channel. \n'
-        + '☒Audio track is 6 channel, no 2 channel exists. Creating 2 channel "2.0" from 6 channel. \n',
-      preset: ', -map 0 -c:v copy -c:a copy -map 0:1 -c:a:0 aac -ac 2 -metadata:s:a:0 "title=2.0" -metadata:s:a:0 "language=eng" -map 0:2 -c:a:1 aac -ac 2 -metadata:s:a:1 "title=2.0" -metadata:s:a:1 "language=eng" -map 0:3 -c:a:2 aac -ac 2 -metadata:s:a:2 "title=2.0" -metadata:s:a:2 "language=eng" -map 0:4 -c:a:3 aac -ac 2 -metadata:s:a:3 "title=2.0" -metadata:s:a:3 "language=fre" -map 0:5 -c:a:4 aac -ac 2 -metadata:s:a:4 "title=2.0" -metadata:s:a:4 "language=eng"  -strict -2 -c:s copy -max_muxing_queue_size 9999 ',
-    },
-  },
-
-  // --- preserve_channel_title: true - preserves original title in downmix name ---
-
+  // Original title already ends with the new layout ("... 2.0") - buildDownmixTitle must not
+  // duplicate the suffix.
   {
     input: {
       file: (() => {
@@ -340,7 +228,6 @@ const tests = [
       })(),
       librarySettings: {},
       inputs: {
-        aac_stereo: 'false',
         downmix: 'true',
         preserve_channel_title: 'true',
       },
@@ -352,11 +239,12 @@ const tests = [
       handBrakeMode: false,
       FFmpegMode: true,
       reQueueAfter: true,
-      infoLog: '☒Audio track is 8 channel, no 6 channel exists. Creating 6 channel "Anglais E-AC3 2.0 - 5.1" from 8 channel. \n',
-      preset: ', -map 0 -c:v copy -c:a copy -map 0:1 -c:a:0 ac3 -ac 6 -metadata:s:a:0 "title=Anglais E-AC3 2.0 - 5.1" -metadata:s:a:0 "language=eng"  -strict -2 -c:s copy -max_muxing_queue_size 9999 ',
+      infoLog: '☒Audio track is 8 channel. Creating 2 channel "Anglais E-AC3 2.0" from 8 channel. \n',
+      preset: ', -map 0 -c copy -c:a:0 libopus -ac 2 -metadata:s:a:0 "title=Anglais E-AC3 2.0" -metadata:s:a:0 "language=eng"  -strict -2 -max_muxing_queue_size 9999 ',
     },
   },
 
+  // Original title does not already end with the new layout - it gets appended.
   {
     input: {
       file: (() => {
@@ -367,7 +255,6 @@ const tests = [
       })(),
       librarySettings: {},
       inputs: {
-        aac_stereo: 'false',
         downmix: 'true',
         preserve_channel_title: 'true',
       },
@@ -379,25 +266,17 @@ const tests = [
       handBrakeMode: false,
       FFmpegMode: true,
       reQueueAfter: true,
-      infoLog: '☒Audio track is 8 channel, no 6 channel exists. Creating 6 channel "E-AC-3 Atmos 5.1" from 8 channel. \n',
-      preset: ', -map 0 -c:v copy -c:a copy -map 0:1 -c:a:0 ac3 -ac 6 -metadata:s:a:0 "title=E-AC-3 Atmos 5.1" -metadata:s:a:0 "language=eng"  -strict -2 -c:s copy -max_muxing_queue_size 9999 ',
+      infoLog: '☒Audio track is 8 channel. Creating 2 channel "E-AC-3 Atmos 5.1 - 2.0" from 8 channel. \n',
+      preset: ', -map 0 -c copy -c:a:0 libopus -ac 2 -metadata:s:a:0 "title=E-AC-3 Atmos 5.1 - 2.0" -metadata:s:a:0 "language=eng"  -strict -2 -max_muxing_queue_size 9999 ',
     },
   },
 
+  // No original title at all - buildDownmixTitle falls back to the layout string itself.
   {
     input: {
-      file: (() => {
-        const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
-        file.ffProbeData.streams[1].channels = 8;
-        file.ffProbeData.streams[2].channels = 8;
-        file.ffProbeData.streams[3].channels = 6;
-        file.ffProbeData.streams[4].channels = 6;
-        file.ffProbeData.streams[5].channels = 6;
-        return file;
-      })(),
+      file: _.cloneDeep(require('../sampleData/media/sampleH264_1.json')),
       librarySettings: {},
       inputs: {
-        aac_stereo: 'false',
         downmix: 'true',
         preserve_channel_title: 'true',
       },
@@ -405,114 +284,12 @@ const tests = [
     },
     output: {
       processFile: true,
-      container: '.mkv',
+      container: '.mp4',
       handBrakeMode: false,
       FFmpegMode: true,
       reQueueAfter: true,
-      infoLog: '☒Audio track is 6 channel, no 2 channel exists. Creating 2 channel "Anglais E-AC3 2.0" from 6 channel. \n'
-      + '☒Audio track is 6 channel, no 2 channel exists. Creating 2 channel "Français E-AC3 2.0" from 6 channel. \n'
-      + '☒Audio track is 6 channel, no 2 channel exists. Creating 2 channel "Anglais E-AC3 2.0" from 6 channel. \n',
-      preset: ', -map 0 -c:v copy -c:a copy -map 0:3 -c:a:2 aac -ac 2 -metadata:s:a:2 "title=Anglais E-AC3 2.0" -metadata:s:a:2 "language=eng" -map 0:4 -c:a:3 aac -ac 2 -metadata:s:a:3 "title=Français E-AC3 2.0" -metadata:s:a:3 "language=fre" -map 0:5 -c:a:4 aac -ac 2 -metadata:s:a:4 "title=Anglais E-AC3 2.0" -metadata:s:a:4 "language=eng"  -strict -2 -c:s copy -max_muxing_queue_size 9999 ',
-    },
-  },
-
-  {
-    input: {
-      file: (() => {
-        const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
-        file.ffProbeData.streams[1].channels = 8;
-        file.ffProbeData.streams[2].channels = 8;
-        file.ffProbeData.streams[3].channels = 8;
-        file.ffProbeData.streams[4].channels = 8;
-        file.ffProbeData.streams[5].channels = 8;
-        return file;
-      })(),
-      librarySettings: {},
-      inputs: {
-        aac_stereo: 'false',
-        downmix: 'true',
-        downmix_single_track: 'false',
-        preserve_channel_title: 'true',
-      },
-      otherArguments: {},
-    },
-    output: {
-      processFile: true,
-      container: '.mkv',
-      handBrakeMode: false,
-      FFmpegMode: true,
-      reQueueAfter: true,
-      infoLog: '☒Audio track is 8 channel, no 6 channel exists. Creating 6 channel "Anglais E-AC3 2.0 - 5.1" from 8 channel. \n'
-        + '☒Audio track is 8 channel, no 6 channel exists. Creating 6 channel "Anglais E-AC3 2.0 - 5.1" from 8 channel. \n'
-        + '☒Audio track is 8 channel, no 6 channel exists. Creating 6 channel "Anglais E-AC3 2.0 - 5.1" from 8 channel. \n'
-        + '☒Audio track is 8 channel, no 6 channel exists. Creating 6 channel "Français E-AC3 2.0 - 5.1" from 8 channel. \n'
-        + '☒Audio track is 8 channel, no 6 channel exists. Creating 6 channel "Anglais E-AC3 2.0 - 5.1" from 8 channel. \n',
-      preset: ', -map 0 -c:v copy -c:a copy -map 0:1 -c:a:0 ac3 -ac 6 -metadata:s:a:0 "title=Anglais E-AC3 2.0 - 5.1" -metadata:s:a:0 "language=eng" -map 0:2 -c:a:1 ac3 -ac 6 -metadata:s:a:1 "title=Anglais E-AC3 2.0 - 5.1" -metadata:s:a:1 "language=eng" -map 0:3 -c:a:2 ac3 -ac 6 -metadata:s:a:2 "title=Anglais E-AC3 2.0 - 5.1" -metadata:s:a:2 "language=eng" -map 0:4 -c:a:3 ac3 -ac 6 -metadata:s:a:3 "title=Français E-AC3 2.0 - 5.1" -metadata:s:a:3 "language=fre" -map 0:5 -c:a:4 ac3 -ac 6 -metadata:s:a:4 "title=Anglais E-AC3 2.0 - 5.1" -metadata:s:a:4 "language=eng"  -strict -2 -c:s copy -max_muxing_queue_size 9999 ',
-
-    },
-  },
-
-  // DTS 6.1 (7 channel) - preserve_channel_title: true
-  {
-    input: {
-      file: (() => {
-        const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
-        file.ffProbeData.streams[1].channels = 7;
-        file.ffProbeData.streams[1].codec_name = 'dts';
-        return file;
-      })(),
-      librarySettings: {},
-      inputs: {
-        aac_stereo: 'false',
-        downmix: 'true',
-        preserve_channel_title: 'true',
-      },
-      otherArguments: {},
-    },
-    output: {
-      processFile: true,
-      container: '.mkv',
-      handBrakeMode: false,
-      FFmpegMode: true,
-      reQueueAfter: true,
-      infoLog: '☒Audio track is 7 channel (6.1), no 6 channel exists. Creating 6 channel "Anglais E-AC3 2.0 - 5.1" from 7 channel. \n',
-      preset: ', -map 0 -c:v copy -c:a copy -map 0:1 -c:a:0 ac3 -ac 6 -metadata:s:a:0 "title=Anglais E-AC3 2.0 - 5.1" -metadata:s:a:0 "language=eng"  -strict -2 -c:s copy -max_muxing_queue_size 9999 ',
-    },
-  },
-
-  // DTS 6.1 (7 channel) with existing 6ch but no 2ch - preserve_channel_title: true
-  {
-    input: {
-      file: (() => {
-        const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
-        file.ffProbeData.streams[1].channels = 7;
-        file.ffProbeData.streams[1].codec_name = 'dts';
-        file.ffProbeData.streams[2].channels = 6;
-        file.ffProbeData.streams[3].channels = 6;
-        file.ffProbeData.streams[4].channels = 6;
-        file.ffProbeData.streams[5].channels = 6;
-        return file;
-      })(),
-      librarySettings: {},
-      inputs: {
-        aac_stereo: 'false',
-        downmix: 'true',
-        preserve_channel_title: 'true',
-      },
-      otherArguments: {},
-    },
-    output: {
-      processFile: true,
-      container: '.mkv',
-      handBrakeMode: false,
-      FFmpegMode: true,
-      reQueueAfter: true,
-      infoLog: '☒Audio track is 7 channel (6.1), no 2 channel exists. Creating 2 channel "Anglais E-AC3 2.0" from 7 channel. \n'
-        + '☒Audio track is 6 channel, no 2 channel exists. Creating 2 channel "Anglais E-AC3 2.0" from 6 channel. \n'
-        + '☒Audio track is 6 channel, no 2 channel exists. Creating 2 channel "Anglais E-AC3 2.0" from 6 channel. \n'
-        + '☒Audio track is 6 channel, no 2 channel exists. Creating 2 channel "Français E-AC3 2.0" from 6 channel. \n'
-        + '☒Audio track is 6 channel, no 2 channel exists. Creating 2 channel "Anglais E-AC3 2.0" from 6 channel. \n',
-      preset: ', -map 0 -c:v copy -c:a copy -map 0:1 -c:a:0 aac -ac 2 -metadata:s:a:0 "title=Anglais E-AC3 2.0" -metadata:s:a:0 "language=eng" -map 0:2 -c:a:1 aac -ac 2 -metadata:s:a:1 "title=Anglais E-AC3 2.0" -metadata:s:a:1 "language=eng" -map 0:3 -c:a:2 aac -ac 2 -metadata:s:a:2 "title=Anglais E-AC3 2.0" -metadata:s:a:2 "language=eng" -map 0:4 -c:a:3 aac -ac 2 -metadata:s:a:3 "title=Français E-AC3 2.0" -metadata:s:a:3 "language=fre" -map 0:5 -c:a:4 aac -ac 2 -metadata:s:a:4 "title=Anglais E-AC3 2.0" -metadata:s:a:4 "language=eng"  -strict -2 -c:s copy -max_muxing_queue_size 9999 ',
+      infoLog: '☒Audio track is 6 channel. Creating 2 channel "2.0" from 6 channel. \n',
+      preset: ', -map 0 -c copy -c:a:0 libopus -ac 2 -metadata:s:a:0 "title=2.0" -metadata:s:a:0 "language=und"  -strict -2 -max_muxing_queue_size 9999 ',
     },
   },
 ];
