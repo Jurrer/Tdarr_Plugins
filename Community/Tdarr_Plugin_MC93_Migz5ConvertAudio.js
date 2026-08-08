@@ -44,19 +44,6 @@ const details = () => ({
              false`,
     },
     {
-      name: "downmix_single_track",
-      type: "boolean",
-      defaultValue: false,
-      inputUI: {
-        type: "dropdown",
-        options: ["false", "true"],
-      },
-      tooltip:
-        "By default this plugin will downmix each track. " +
-        "So four 6 channel tracks will result in four 2 channel tracks." +
-        " Enable this option to only downmix a single track.",
-    },
-    {
       name: "preserve_channel_title",
       type: "boolean",
       defaultValue: false,
@@ -122,7 +109,6 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   let ffmpegCommandInsert = "";
   let audioIdx = 0;
   let convert = false;
-  let is2channelAdded = false;
   // Indices of streams downmixed in the loop below, so the opus-conversion
   // pass can skip a track without recomputing (and potentially disagreeing
   // with) the downmix eligibility check.
@@ -141,12 +127,7 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
         // Check if inputs.downmix is set to true.
         if (inputs.downmix === true) {
           // Downmix any track with more than 2 channels to stereo.
-          if (
-            file.ffProbeData.streams[i].channels > 2 &&
-            (inputs.downmix_single_track === false ||
-              (inputs.downmix_single_track === true &&
-                is2channelAdded === false))
-          ) {
+          if (file.ffProbeData.streams[i].channels > 2) {
             const newTitle = inputs.preserve_channel_title
               ? buildDownmixTitle(originalTitle, "2.0") : "2.0";
             ffmpegCommandInsert += `-c:a:${audioIdx} libopus -ac 2 `;
@@ -157,7 +138,6 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
             response.infoLog +=
               `☒Audio track is ${file.ffProbeData.streams[i].channels} channel. Creating 2 channel "${newTitle}" from ${file.ffProbeData.streams[i].channels} channel. \n`;
             convert = true;
-            is2channelAdded = true;
             downmixedIndices.push(i);
           }
         }
