@@ -12,9 +12,10 @@ const details = () => ({
                   NVDEC & NVENC compatable GPU required.
                   This plugin will skip any files that are in the VP9 codec.
                   Audio tracks can also be converted to opus and downmixed to stereo in the same pass.
-                  Commentary audio tracks can optionally be removed in the same pass.`,
-  Version: '1.1-custom',
-  Tags: 'pre-processing,ffmpeg,video,audio,nvenc h265,opus,commentary,configurable',
+                  Commentary audio tracks can optionally be removed in the same pass.
+                  If the video stream isn't first, streams are reordered so Tdarr detects the codec correctly.`,
+  Version: '1.2-custom',
+  Tags: 'pre-processing,ffmpeg,video,audio,nvenc h265,opus,commentary,reorder,configurable',
   Inputs: [
     {
       name: 'container',
@@ -265,6 +266,20 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     response.infoLog += 'File is not a video. \n';
     return response;
   }
+
+  // --- Stream reorder (from Lmg1 Reorder Streams) ---
+  // Tdarr reads a file's codec from its first stream, so a file whose stream 0 is
+  // audio/subtitle gets misdetected. Listing the map specifiers by type puts video
+  // first; it is a pure remux of stream order and re-encodes nothing.
+  let reorderStreams = false;
+  try {
+    reorderStreams = file.ffProbeData.streams[0].codec_type.toLowerCase() !== 'video';
+  } catch (err) {
+    // err
+  }
+  const mapArgs = reorderStreams
+    ? '-map 0:v? -map 0:a? -map 0:s? -map 0:d? -map 0:t? '
+    : '-map 0 ';
 
   // Check if duration info is filled, if so times it by 0.0166667 to get time in minutes.
   // If not filled then get duration of stream 0 and do the same.
@@ -594,9 +609,9 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   }
 
   if (videoAction === 'none') {
-    if (audioConvert || commentaryRemoved) {
+    if (audioConvert || commentaryRemoved || reorderStreams) {
       response.processFile = true;
-      response.preset = `, -map 0 ${audioRemoveArgs}-c copy ${audioArgs} `
+      response.preset = `, ${mapArgs}${audioRemoveArgs}-c copy ${audioArgs} `
         + '-strict -2 -max_muxing_queue_size 9999 ';
     } else {
       response.processFile = false;
@@ -604,10 +619,10 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   } else if (videoAction === 'remux') {
     response.processFile = true;
     if (audioConvert || commentaryRemoved) {
-      response.preset = `, -map 0 ${audioRemoveArgs}-c copy ${extraArguments}${audioArgs}`
+      response.preset = `, ${mapArgs}${audioRemoveArgs}-c copy ${extraArguments}${audioArgs}`
         + '-strict -2 -max_muxing_queue_size 9999 ';
     } else {
-      response.preset = `, -map 0 -c copy ${extraArguments}`;
+      response.preset = `, ${mapArgs}-c copy ${extraArguments}`;
     }
   } else {
     // Keep encoder/filter args out of remux commands; FFmpeg cannot combine them with `-c copy`.
@@ -642,12 +657,12 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     const outputArguments = `${extraArguments}${transcodeOnlyArguments}`;
     if (audioConvert || commentaryRemoved) {
       response.preset
-        += `${genpts}, -map 0 ${audioRemoveArgs}-c:v hevc_nvenc -cq:v 19 ${bitrateSettings} `
+        += `${genpts}, ${mapArgs}${audioRemoveArgs}-c:v hevc_nvenc -cq:v 19 ${bitrateSettings} `
         + `-spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy ${audioArgs}-c:s copy `
         + `-strict -2 -max_muxing_queue_size 9999 ${outputArguments}`;
     } else {
       response.preset
-        += `${genpts}, -map 0 -c:v hevc_nvenc -cq:v 19 ${bitrateSettings} `
+        += `${genpts}, ${mapArgs}-c:v hevc_nvenc -cq:v 19 ${bitrateSettings} `
         + `-spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy -c:s copy -max_muxing_queue_size 9999 ${outputArguments}`;
     }
     response.processFile = true;
@@ -660,8 +675,11 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     }
   }
 
-  // Append commentary-removal logging, then audio-pass logging last, mirroring the order
-  // this work would be logged if it ran as a chain of plugins after the video pass.
+  // Append reorder logging, then commentary-removal logging, then audio-pass logging last,
+  // mirroring the order this work would be logged if it ran as a chain of plugins.
+  if (reorderStreams) {
+    response.infoLog += '☒Video is not in the first stream. Reordering streams. \n';
+  }
   if (inputs.remove_commentary === true) {
     if (commentaryRemoved) {
       response.infoLog += commentaryLog;

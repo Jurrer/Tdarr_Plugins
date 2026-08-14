@@ -1117,6 +1117,118 @@ const tests = [
       container: '.mkv',
     },
   },
+
+  // --- Ported from Lmg1 Reorder Streams ---
+  // In each case below, streams[0]/streams[1] are swapped so the video stream is no longer
+  // first. The plugin should always reorder (no input toggle), listing the map specifiers by
+  // type so video leads, regardless of what else it does to the file.
+
+  // Video not first, otherwise nothing to do (already hevc, container matches) - reorder-only
+  // remux triggers processFile on its own.
+  {
+    input: {
+      file: (() => {
+        const file = _.cloneDeep(require('../sampleData/media/sampleH265_1.json'));
+        const audio = file.ffProbeData.streams[1];
+        // eslint-disable-next-line prefer-destructuring
+        file.ffProbeData.streams[1] = file.ffProbeData.streams[0];
+        file.ffProbeData.streams[0] = audio;
+        return file;
+      })(),
+      librarySettings: {},
+      inputs: {},
+      otherArguments: {},
+    },
+    output: {
+      processFile: true,
+      preset: ', -map 0:v? -map 0:a? -map 0:s? -map 0:d? -map 0:t? -c copy  -strict -2 -max_muxing_queue_size 9999 ',
+      handBrakeMode: false,
+      FFmpegMode: true,
+      reQueueAfter: true,
+      infoLog: 'No cutoff set. Checking codec. \n'
+        + 'Codec is hevc and container is mkv. Nothing to do. \n'
+        + '☒Video is not in the first stream. Reordering streams. \n'
+        + '☑File contains all required audio formats. \n',
+      container: '.mkv',
+    },
+  },
+
+  // Video not first, also needs transcoding - reordered map list appears inside the full
+  // hevc_nvenc preset.
+  {
+    input: {
+      file: (() => {
+        const file = _.cloneDeep(require('../sampleData/media/sampleH264_1.json'));
+        const audio = file.ffProbeData.streams[1];
+        // eslint-disable-next-line prefer-destructuring
+        file.ffProbeData.streams[1] = file.ffProbeData.streams[0];
+        file.ffProbeData.streams[0] = audio;
+        return file;
+      })(),
+      librarySettings: {},
+      inputs: {},
+      otherArguments: {},
+    },
+    output: {
+      processFile: true,
+      preset: '-hwaccel cuda -hwaccel_output_format cuda, -map 0:v? -map 0:a? -map 0:s? -map 0:d? -map 0:t? -c:v hevc_nvenc -cq:v 19 -b:v 758k -minrate 530k -maxrate 985k -bufsize 1517k -spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy -c:s copy -max_muxing_queue_size 9999 ',
+      handBrakeMode: false,
+      FFmpegMode: true,
+      reQueueAfter: true,
+      infoLog: 'No cutoff set. Checking codec. \n'
+        + 'Container for output selected as mkv. \n'
+        + 'Current bitrate = 1517 \n'
+        + 'Bitrate settings: \n'
+        + 'Target = 758 \n'
+        + 'Minimum = 530 \n'
+        + 'Maximum = 985 \n'
+        + 'Codec is not hevc/vp9 and bitrate 1517k is above cutoff. Transcoding to hevc. \n'
+        + '☒Video is not in the first stream. Reordering streams. \n'
+        + '☑File contains all required audio formats. \n',
+      container: '.mkv',
+    },
+  },
+
+  // Video not first, also removing a commentary track - proves the negative -map -0:a:N
+  // exclusion coexists with the reordered positive maps.
+  {
+    input: {
+      file: (() => {
+        const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
+        const audio = file.ffProbeData.streams[1];
+        // eslint-disable-next-line prefer-destructuring
+        file.ffProbeData.streams[1] = file.ffProbeData.streams[0];
+        file.ffProbeData.streams[0] = audio;
+        file.ffProbeData.streams[2].tags.title = 'Director Commentary';
+        return file;
+      })(),
+      librarySettings: {},
+      inputs: {
+        remove_commentary: 'true',
+      },
+      otherArguments: {},
+    },
+    output: {
+      processFile: true,
+      preset: '-hwaccel cuda -hwaccel_output_format cuda, -map 0:v? -map 0:a? -map 0:s? -map 0:d? -map 0:t? -map -0:a:1 -c:v hevc_nvenc -cq:v 19 -b:v 3933k -minrate 2753k -maxrate 5112k -bufsize 7866k -spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy -c:s copy -strict -2 -max_muxing_queue_size 9999 ',
+      handBrakeMode: false,
+      FFmpegMode: true,
+      reQueueAfter: true,
+      infoLog: 'No cutoff set. Checking codec. \n'
+        + 'Container for output selected as mkv. \n'
+        + 'Current bitrate = 7866 \n'
+        + 'Bitrate settings: \n'
+        + 'Target = 3933 \n'
+        + 'Minimum = 2753 \n'
+        + 'Maximum = 5112 \n'
+        + 'Codec is not hevc/vp9 and bitrate 7866k is above cutoff. Transcoding to hevc. \n'
+        + '☒Video is not in the first stream. Reordering streams. \n'
+        + '☒Removing commentary audio track 1 (stream index 2). \n'
+        + '☒Removed 1 commentary track(s). \n'
+        + '☑File contains all required audio formats. \n',
+      container: '.mkv',
+    },
+  },
 ];
 
 void run(tests);
