@@ -16,3 +16,5 @@
 *.mkv
 .DS_Store
 *.txt
+.rtk
+.serena
