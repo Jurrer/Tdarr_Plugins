@@ -294,7 +294,9 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   // Check if inputs.bitrate_cutoff has something entered - allow remux but skip transcode below this.
   if (!forceTranscode && inputs.bitrate_cutoff !== '') {
     if (currentBitrate <= inputs.bitrate_cutoff) {
-      response.infoLog += `Bitrate ${currentBitrate}k is at or below cutoff ${inputs.bitrate_cutoff}k. Allowing remux, skipping transcode. \n`;
+      response.infoLog
+        += `Bitrate ${currentBitrate}k is at or below cutoff ${inputs.bitrate_cutoff}k. `
+        + 'Allowing remux, skipping transcode. \n';
     }
   }
 
@@ -344,7 +346,8 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
               audioArgs += `-metadata:s:a:${audioIdx} "language=${language}" `;
             }
             audioLog
-              += `☒Audio track is ${file.ffProbeData.streams[i].channels} channel. Creating 2 channel "${newTitle}" from ${file.ffProbeData.streams[i].channels} channel. \n`;
+              += `☒Audio track is ${file.ffProbeData.streams[i].channels} channel. `
+              + `Creating 2 channel "${newTitle}" from ${file.ffProbeData.streams[i].channels} channel. \n`;
             audioConvert = true;
             isDownmixTrack = true;
           }
@@ -470,7 +473,9 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
           && file.container === inputs.container
         ) {
           videoAction = 'none';
-          response.infoLog += `Codec is ${file.ffProbeData.streams[i].codec_name} and container is ${inputs.container}. Nothing to do. \n`;
+          response.infoLog
+            += `Codec is ${file.ffProbeData.streams[i].codec_name} and container is ${inputs.container}. `
+            + 'Nothing to do. \n';
           break;
         }
         // If codec is hevc/vp9 but container mismatch - remux if below cutoff, transcode if above
@@ -480,7 +485,9 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
           && file.container !== inputs.container
         ) {
           videoAction = 'remux';
-          response.infoLog += `Codec is ${file.ffProbeData.streams[i].codec_name} but container mismatch (current: ${file.container}, wanted: ${inputs.container}). Remuxing. \n`;
+          response.infoLog
+            += `Codec is ${file.ffProbeData.streams[i].codec_name} but container mismatch `
+            + `(current: ${file.container}, wanted: ${inputs.container}). Remuxing. \n`;
           break;
         }
 
@@ -488,10 +495,14 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
         if (belowCutoff) {
           if (file.container !== inputs.container) {
             videoAction = 'remux';
-            response.infoLog += `Container mismatch (current: ${file.container}, wanted: ${inputs.container}). Remuxing only. \n`;
+            response.infoLog
+              += `Container mismatch (current: ${file.container}, wanted: ${inputs.container}). `
+              + 'Remuxing only. \n';
           } else {
             videoAction = 'none';
-            response.infoLog += `Codec is ${file.ffProbeData.streams[i].codec_name} (not hevc/vp9) but bitrate ${currentBitrate}k is below cutoff ${inputs.bitrate_cutoff}k. Skipping transcode. \n`;
+            response.infoLog
+              += `Codec is ${file.ffProbeData.streams[i].codec_name} (not hevc/vp9) but bitrate ${currentBitrate}k `
+              + `is below cutoff ${inputs.bitrate_cutoff}k. Skipping transcode. \n`;
           }
           break;
         }
@@ -560,9 +571,11 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     }
     response.processFile = true;
     if (forceTranscode === true) {
-      response.infoLog += `Bitrate ${currentBitrate}k is above max ${inputs.max_bitrate}k. Forcing transcode to hevc. \n`;
+      response.infoLog
+        += `Bitrate ${currentBitrate}k is above max ${inputs.max_bitrate}k. Forcing transcode to hevc. \n`;
     } else {
-      response.infoLog += `Codec is not hevc/vp9 and bitrate ${currentBitrate}k is above cutoff. Transcoding to hevc. \n`;
+      response.infoLog
+        += `Codec is not hevc/vp9 and bitrate ${currentBitrate}k is above cutoff. Transcoding to hevc. \n`;
     }
   }
 
