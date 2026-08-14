@@ -828,6 +828,295 @@ const tests = [
       container: '.mkv',
     },
   },
+
+  // --- Merge-specific cases: remove_commentary (ported from Tdarr_Plugin_sdd3_Remove_Commentary_Tracks) ---
+
+  // remove_commentary left at default (false): a commentary-tagged track is present but the
+  // detector never runs, so output is byte-identical to the plain transcode case above.
+  {
+    input: {
+      file: (() => {
+        const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
+        file.ffProbeData.streams[2].tags.title = 'Director Commentary';
+        return file;
+      })(),
+      librarySettings: {},
+      inputs: {},
+      otherArguments: {},
+    },
+    output: {
+      processFile: true,
+      preset: '-hwaccel cuda -hwaccel_output_format cuda, -map 0 -c:v hevc_nvenc -cq:v 19 -b:v 3933k -minrate 2753k -maxrate 5112k -bufsize 7866k -spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy -c:s copy -max_muxing_queue_size 9999 ',
+      handBrakeMode: false,
+      FFmpegMode: true,
+      reQueueAfter: true,
+      infoLog: 'No cutoff set. Checking codec. \n'
+        + 'Container for output selected as mkv. \n'
+        + 'Current bitrate = 7866 \n'
+        + 'Bitrate settings: \n'
+        + 'Target = 3933 \n'
+        + 'Minimum = 2753 \n'
+        + 'Maximum = 5112 \n'
+        + 'Codec is not hevc/vp9 and bitrate 7866k is above cutoff. Transcoding to hevc. \n'
+        + '☑File contains all required audio formats. \n',
+      container: '.mkv',
+    },
+  },
+
+  // remove_commentary on, title-based detection, transcode path: -map -0:a:1 (INPUT index of the
+  // 2nd audio track) is inserted right after -map 0, with no encoder args for the dropped track.
+  {
+    input: {
+      file: (() => {
+        const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
+        file.ffProbeData.streams[2].tags.title = 'Director Commentary';
+        return file;
+      })(),
+      librarySettings: {},
+      inputs: {
+        remove_commentary: 'true',
+      },
+      otherArguments: {},
+    },
+    output: {
+      processFile: true,
+      preset: '-hwaccel cuda -hwaccel_output_format cuda, -map 0 -map -0:a:1 -c:v hevc_nvenc -cq:v 19 -b:v 3933k -minrate 2753k -maxrate 5112k -bufsize 7866k -spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy -c:s copy -strict -2 -max_muxing_queue_size 9999 ',
+      handBrakeMode: false,
+      FFmpegMode: true,
+      reQueueAfter: true,
+      infoLog: 'No cutoff set. Checking codec. \n'
+        + 'Container for output selected as mkv. \n'
+        + 'Current bitrate = 7866 \n'
+        + 'Bitrate settings: \n'
+        + 'Target = 3933 \n'
+        + 'Minimum = 2753 \n'
+        + 'Maximum = 5112 \n'
+        + 'Codec is not hevc/vp9 and bitrate 7866k is above cutoff. Transcoding to hevc. \n'
+        + '☒Removing commentary audio track 1 (stream index 2). \n'
+        + '☒Removed 1 commentary track(s). \n'
+        + '☑File contains all required audio formats. \n',
+      container: '.mkv',
+    },
+  },
+
+  // Renumbering guard: removal + convert_all_to_opus together. Input audio index 1 (stream 2) is
+  // dropped, but the 3 surviving tracks that follow it get OUTPUT indices -c:a:1.."-c:a:3, not
+  // 2..4 - proving -c:a:N/-metadata:s:a:N track the post-removal output layout, not the input one.
+  {
+    input: {
+      file: (() => {
+        const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
+        file.ffProbeData.streams[2].tags.title = 'Director Commentary';
+        return file;
+      })(),
+      librarySettings: {},
+      inputs: {
+        remove_commentary: 'true',
+        convert_all_to_opus: 'true',
+      },
+      otherArguments: {},
+    },
+    output: {
+      processFile: true,
+      preset: '-hwaccel cuda -hwaccel_output_format cuda, -map 0 -map -0:a:1 -c:v hevc_nvenc -cq:v 19 -b:v 3933k -minrate 2753k -maxrate 5112k -bufsize 7866k -spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy -c:a:0 libopus -metadata:s:a:0 "language=eng" -c:a:1 libopus -metadata:s:a:1 "language=eng" -c:a:2 libopus -metadata:s:a:2 "language=fre" -c:a:3 libopus -metadata:s:a:3 "language=eng" -c:s copy -strict -2 -max_muxing_queue_size 9999 ',
+      handBrakeMode: false,
+      FFmpegMode: true,
+      reQueueAfter: true,
+      infoLog: 'No cutoff set. Checking codec. \n'
+        + 'Container for output selected as mkv. \n'
+        + 'Current bitrate = 7866 \n'
+        + 'Bitrate settings: \n'
+        + 'Target = 3933 \n'
+        + 'Minimum = 2753 \n'
+        + 'Maximum = 5112 \n'
+        + 'Codec is not hevc/vp9 and bitrate 7866k is above cutoff. Transcoding to hevc. \n'
+        + '☒Removing commentary audio track 1 (stream index 2). \n'
+        + '☒Removed 1 commentary track(s). \n'
+        + '☒Audio track is 2 channel but is not opus. Converting. \n'
+        + '☒Audio track is 2 channel but is not opus. Converting. \n'
+        + '☒Audio track is 2 channel but is not opus. Converting. \n'
+        + '☒Audio track is 2 channel but is not opus. Converting. \n',
+      container: '.mkv',
+    },
+  },
+
+  // Detection variant: disposition.comment === 1 (no "commentary" text in title/handler_name).
+  {
+    input: {
+      file: (() => {
+        const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
+        file.ffProbeData.streams[3].disposition.comment = 1;
+        return file;
+      })(),
+      librarySettings: {},
+      inputs: {
+        remove_commentary: 'true',
+      },
+      otherArguments: {},
+    },
+    output: {
+      processFile: true,
+      preset: '-hwaccel cuda -hwaccel_output_format cuda, -map 0 -map -0:a:2 -c:v hevc_nvenc -cq:v 19 -b:v 3933k -minrate 2753k -maxrate 5112k -bufsize 7866k -spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy -c:s copy -strict -2 -max_muxing_queue_size 9999 ',
+      handBrakeMode: false,
+      FFmpegMode: true,
+      reQueueAfter: true,
+      infoLog: 'No cutoff set. Checking codec. \n'
+        + 'Container for output selected as mkv. \n'
+        + 'Current bitrate = 7866 \n'
+        + 'Bitrate settings: \n'
+        + 'Target = 3933 \n'
+        + 'Minimum = 2753 \n'
+        + 'Maximum = 5112 \n'
+        + 'Codec is not hevc/vp9 and bitrate 7866k is above cutoff. Transcoding to hevc. \n'
+        + '☒Removing commentary audio track 2 (stream index 3). \n'
+        + '☒Removed 1 commentary track(s). \n'
+        + '☑File contains all required audio formats. \n',
+      container: '.mkv',
+    },
+  },
+
+  // Detection variant: "commentary" in tags.handler_name (no comment disposition or title match).
+  {
+    input: {
+      file: (() => {
+        const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
+        file.ffProbeData.streams[4].tags.handler_name = 'Commentary';
+        return file;
+      })(),
+      librarySettings: {},
+      inputs: {
+        remove_commentary: 'true',
+      },
+      otherArguments: {},
+    },
+    output: {
+      processFile: true,
+      preset: '-hwaccel cuda -hwaccel_output_format cuda, -map 0 -map -0:a:3 -c:v hevc_nvenc -cq:v 19 -b:v 3933k -minrate 2753k -maxrate 5112k -bufsize 7866k -spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy -c:s copy -strict -2 -max_muxing_queue_size 9999 ',
+      handBrakeMode: false,
+      FFmpegMode: true,
+      reQueueAfter: true,
+      infoLog: 'No cutoff set. Checking codec. \n'
+        + 'Container for output selected as mkv. \n'
+        + 'Current bitrate = 7866 \n'
+        + 'Bitrate settings: \n'
+        + 'Target = 3933 \n'
+        + 'Minimum = 2753 \n'
+        + 'Maximum = 5112 \n'
+        + 'Codec is not hevc/vp9 and bitrate 7866k is above cutoff. Transcoding to hevc. \n'
+        + '☒Removing commentary audio track 3 (stream index 4). \n'
+        + '☒Removed 1 commentary track(s). \n'
+        + '☑File contains all required audio formats. \n',
+      container: '.mkv',
+    },
+  },
+
+  // Audio-only path: hevc + matching container ("nothing to do" for video) but a commentary track
+  // still needs removing, so processFile flips to true off the back of removal alone.
+  {
+    input: {
+      file: (() => {
+        const file = _.cloneDeep(require('../sampleData/media/sampleH265_1.json'));
+        const commentaryTrack = _.cloneDeep(file.ffProbeData.streams[1]);
+        commentaryTrack.tags = { ...commentaryTrack.tags, title: 'Commentary' };
+        file.ffProbeData.streams.splice(1, 0, commentaryTrack);
+        return file;
+      })(),
+      librarySettings: {},
+      inputs: {
+        remove_commentary: 'true',
+      },
+      otherArguments: {},
+    },
+    output: {
+      processFile: true,
+      preset: ', -map 0 -map -0:a:0 -c copy  -strict -2 -max_muxing_queue_size 9999 ',
+      handBrakeMode: false,
+      FFmpegMode: true,
+      reQueueAfter: true,
+      infoLog: 'No cutoff set. Checking codec. \n'
+        + 'Codec is hevc and container is mkv. Nothing to do. \n'
+        + '☒Removing commentary audio track 0 (stream index 1). \n'
+        + '☒Removed 1 commentary track(s). \n'
+        + '☑File contains all required audio formats. \n',
+      container: '.mkv',
+    },
+  },
+
+  // All-commentary guard: every audio track looks like commentary, so removal is skipped entirely
+  // (no -map -0:a: args) rather than producing a file with no audio.
+  {
+    input: {
+      file: (() => {
+        const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
+        for (let i = 1; i <= 5; i += 1) {
+          file.ffProbeData.streams[i].tags.title = 'Commentary';
+        }
+        return file;
+      })(),
+      librarySettings: {},
+      inputs: {
+        remove_commentary: 'true',
+      },
+      otherArguments: {},
+    },
+    output: {
+      processFile: true,
+      preset: '-hwaccel cuda -hwaccel_output_format cuda, -map 0 -c:v hevc_nvenc -cq:v 19 -b:v 3933k -minrate 2753k -maxrate 5112k -bufsize 7866k -spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy -c:s copy -max_muxing_queue_size 9999 ',
+      handBrakeMode: false,
+      FFmpegMode: true,
+      reQueueAfter: true,
+      infoLog: 'No cutoff set. Checking codec. \n'
+        + 'Container for output selected as mkv. \n'
+        + 'Current bitrate = 7866 \n'
+        + 'Bitrate settings: \n'
+        + 'Target = 3933 \n'
+        + 'Minimum = 2753 \n'
+        + 'Maximum = 5112 \n'
+        + 'Codec is not hevc/vp9 and bitrate 7866k is above cutoff. Transcoding to hevc. \n'
+        + '☒All 5 audio track(s) look like commentary. Skipping removal to avoid a file with no audio. \n'
+        + '☑File contains all required audio formats. \n',
+      container: '.mkv',
+    },
+  },
+
+  // force_conform + removal on the transcode path: -map -0:d (conform) and -map -0:a:1 (removal)
+  // coexist without interfering with each other.
+  {
+    input: {
+      file: (() => {
+        const file = _.cloneDeep(require('../sampleData/media/sampleH264_2.json'));
+        file.ffProbeData.streams[2].tags.title = 'Director Commentary';
+        return file;
+      })(),
+      librarySettings: {},
+      inputs: {
+        container: 'original',
+        force_conform: 'true',
+        bitrate_cutoff: '1000',
+        remove_commentary: 'true',
+      },
+      otherArguments: {},
+    },
+    output: {
+      processFile: true,
+      preset: '-hwaccel cuda -hwaccel_output_format cuda, -map 0 -map -0:a:1 -c:v hevc_nvenc -cq:v 19 -b:v 3933k -minrate 2753k -maxrate 5112k -bufsize 7866k -spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy -c:s copy -strict -2 -max_muxing_queue_size 9999 -map -0:d ',
+      handBrakeMode: false,
+      FFmpegMode: true,
+      reQueueAfter: true,
+      infoLog: 'Bitrate 7866k is between cutoff and max. Checking codec. \n'
+        + 'Container for output selected as mkv. \n'
+        + 'Current bitrate = 7866 \n'
+        + 'Bitrate settings: \n'
+        + 'Target = 3933 \n'
+        + 'Minimum = 2753 \n'
+        + 'Maximum = 5112 \n'
+        + 'Codec is not hevc/vp9 and bitrate 7866k is above cutoff. Transcoding to hevc. \n'
+        + '☒Removing commentary audio track 1 (stream index 2). \n'
+        + '☒Removed 1 commentary track(s). \n'
+        + '☑File contains all required audio formats. \n',
+      container: '.mkv',
+    },
+  },
 ];
 
 void run(tests);

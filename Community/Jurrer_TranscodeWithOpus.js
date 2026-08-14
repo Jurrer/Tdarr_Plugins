@@ -11,9 +11,10 @@ const details = () => ({
                   Working by the logic that H265 can support the same ammount of data at half the bitrate of H264.
                   NVDEC & NVENC compatable GPU required.
                   This plugin will skip any files that are in the VP9 codec.
-                  Audio tracks can also be converted to opus and downmixed to stereo in the same pass.`,
-  Version: '1.0-custom',
-  Tags: 'pre-processing,ffmpeg,video,audio,nvenc h265,opus,configurable',
+                  Audio tracks can also be converted to opus and downmixed to stereo in the same pass.
+                  Commentary audio tracks can optionally be removed in the same pass.`,
+  Version: '1.1-custom',
+  Tags: 'pre-processing,ffmpeg,video,audio,nvenc h265,opus,commentary,configurable',
   Inputs: [
     {
       name: 'container',
@@ -178,6 +179,25 @@ const details = () => ({
         + ' \\nWhen false (default), downmixed tracks use only the new channel layout as the title (e.g. "2.0").'
         + ' \\nWhen true, the plugin appends the new layout to the original title (e.g. "E-AC-3 Atmos 5.1 - 2.0").',
     },
+    {
+      name: 'remove_commentary',
+      type: 'boolean',
+      defaultValue: false,
+      inputUI: {
+        type: 'dropdown',
+        options: ['false', 'true'],
+      },
+      tooltip: `Specify if commentary audio tracks should be removed.
+                \\nA track is considered commentary if it has the "comment" disposition set,
+                or its title/handler name contains "commentary" (case-insensitive).
+                \\nIf every audio track in the file looks like commentary, removal is skipped
+                to avoid producing a file with no audio. Default is false.
+                    \\nExample:\\n
+                    true
+
+                    \\nExample:\\n
+                    false`,
+    },
   ],
 });
 
@@ -194,6 +214,17 @@ const buildDownmixTitle = (originalTitle, layout) => {
     return originalTitle;
   }
   return `${originalTitle} - ${layout}`;
+};
+
+// A stream counts as commentary if it's flagged with the "comment" disposition, or its
+// title/handler name mentions "commentary" (case-insensitive). Ported from
+// Tdarr_Plugin_sdd3_Remove_Commentary_Tracks.
+const isCommentaryStream = (stream) => {
+  const title = (stream.tags?.title || '').toLowerCase();
+  const handlerName = (stream.tags?.handler_name || '').toLowerCase();
+  return stream.disposition?.comment === 1
+    || title.includes('commentary')
+    || handlerName.includes('commentary');
 };
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -308,13 +339,51 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     }
   }
 
-  // --- Audio pass (from Migz Convert Audio Streams) ---
+  // --- Audio pass (from Migz Convert Audio Streams + Remove Commentary Tracks) ---
   // Computed up front so its result is available regardless of which video
   // branch (none/remux/transcode) below ends up firing.
-  let audioIdx = 0;
+  // `inputAudioIdx` counts every audio stream and drives -map -0:a:N (an INPUT stream
+  // specifier), while `outAudioIdx` counts only streams that survive removal and drives
+  // -c:a:N / -metadata:s:a:N (OUTPUT stream specifiers). They stay in lockstep unless
+  // remove_commentary actually drops a track.
+  let inputAudioIdx = 0;
+  let outAudioIdx = 0;
   let audioArgs = '';
+  let audioRemoveArgs = '';
   let audioLog = '';
+  let commentaryLog = '';
   let audioConvert = false;
+  let commentaryRemoved = false;
+  let tracksRemoved = 0;
+
+  // If remove_commentary is enabled, work out up front whether removal should actually
+  // happen - skip it if every audio track looks like commentary, so we don't produce a
+  // file with no audio at all.
+  let removeCommentary = false;
+  let allCommentaryLog = '';
+  if (inputs.remove_commentary === true) {
+    let totalAudio = 0;
+    let matchedAudio = 0;
+    for (let i = 0; i < file.ffProbeData.streams.length; i++) {
+      try {
+        if (file.ffProbeData.streams[i].codec_type.toLowerCase() === 'audio') {
+          totalAudio += 1;
+          if (isCommentaryStream(file.ffProbeData.streams[i])) {
+            matchedAudio += 1;
+          }
+        }
+      } catch (err) {
+        // err
+      }
+    }
+    if (matchedAudio > 0 && matchedAudio < totalAudio) {
+      removeCommentary = true;
+    } else if (matchedAudio > 0 && matchedAudio === totalAudio) {
+      allCommentaryLog
+        += `☒All ${totalAudio} audio track(s) look like commentary. `
+        + 'Skipping removal to avoid a file with no audio. \n';
+    }
+  }
 
   for (let i = 0; i < file.ffProbeData.streams.length; i++) {
     let audioCodecType = '';
@@ -324,62 +393,73 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
       // err
     }
     if (audioCodecType === 'audio') {
-      // Get original track metadata. Strip characters that would break the ffmpeg
-      // command-line quoting (we wrap titles in double quotes below).
-      const originalTitle = (file.ffProbeData.streams[i].tags?.title || '').replace(/["`$\\]/g, '');
-      const language = (file.ffProbeData.streams[i].tags?.language || '').replace(/["`$\\]/g, '');
-      let isDownmixTrack = false;
-      // Catch error here incase user left inputs.downmix empty.
-      try {
-        // Check if inputs.downmix is set to true.
-        if (inputs.downmix === true) {
-          // Downmix any track with more than 2 channels to stereo.
-          if (file.ffProbeData.streams[i].channels > 2) {
-            const newTitle = inputs.preserve_channel_title
-              ? buildDownmixTitle(originalTitle, '2.0') : '2.0';
-            // -ac is a per-stream (OPT_SPEC) option: scope it to this audio
-            // index so it doesn't also force other, non-downmixed audio
-            // outputs (e.g. an opus-converted 8ch track) down to stereo.
-            audioArgs += `-c:a:${audioIdx} libopus -ac:a:${audioIdx} 2 `;
-            audioArgs += `-metadata:s:a:${audioIdx} "title=${newTitle}" `;
-            if (language) {
-              audioArgs += `-metadata:s:a:${audioIdx} "language=${language}" `;
+      // Remove commentary tracks before any downmix/opus work - a dropped track needs no
+      // encoder args, only a -map -0:a:N exclusion keyed to its INPUT index.
+      if (removeCommentary && isCommentaryStream(file.ffProbeData.streams[i])) {
+        audioRemoveArgs += `-map -0:a:${inputAudioIdx} `;
+        commentaryLog += `☒Removing commentary audio track ${inputAudioIdx} (stream index ${i}). \n`;
+        commentaryRemoved = true;
+        tracksRemoved += 1;
+        inputAudioIdx += 1;
+      } else {
+        // Get original track metadata. Strip characters that would break the ffmpeg
+        // command-line quoting (we wrap titles in double quotes below).
+        const originalTitle = (file.ffProbeData.streams[i].tags?.title || '').replace(/["`$\\]/g, '');
+        const language = (file.ffProbeData.streams[i].tags?.language || '').replace(/["`$\\]/g, '');
+        let isDownmixTrack = false;
+        // Catch error here incase user left inputs.downmix empty.
+        try {
+          // Check if inputs.downmix is set to true.
+          if (inputs.downmix === true) {
+            // Downmix any track with more than 2 channels to stereo.
+            if (file.ffProbeData.streams[i].channels > 2) {
+              const newTitle = inputs.preserve_channel_title
+                ? buildDownmixTitle(originalTitle, '2.0') : '2.0';
+              // -ac is a per-stream (OPT_SPEC) option: scope it to this audio
+              // index so it doesn't also force other, non-downmixed audio
+              // outputs (e.g. an opus-converted 8ch track) down to stereo.
+              audioArgs += `-c:a:${outAudioIdx} libopus -ac:a:${outAudioIdx} 2 `;
+              audioArgs += `-metadata:s:a:${outAudioIdx} "title=${newTitle}" `;
+              if (language) {
+                audioArgs += `-metadata:s:a:${outAudioIdx} "language=${language}" `;
+              }
+              audioLog
+                += `☒Audio track is ${file.ffProbeData.streams[i].channels} channel. `
+                + `Creating 2 channel "${newTitle}" from ${file.ffProbeData.streams[i].channels} channel. \n`;
+              audioConvert = true;
+              isDownmixTrack = true;
             }
-            audioLog
-              += `☒Audio track is ${file.ffProbeData.streams[i].channels} channel. `
-              + `Creating 2 channel "${newTitle}" from ${file.ffProbeData.streams[i].channels} channel. \n`;
-            audioConvert = true;
-            isDownmixTrack = true;
           }
+        } catch (err) {
+          // Error
         }
-      } catch (err) {
-        // Error
-      }
 
-      // Catch error here incase user left inputs.convert_all_to_opus empty.
-      try {
-        // Check if inputs.convert_all_to_opus is set to true.
-        if (inputs.convert_all_to_opus === true) {
-          // Check if codec_name for stream is NOT opus.
-          // Skip if this track was already downmixed above.
-          // NOTE: surround (>2ch) sources can hard-fail libopus encoding with
-          // "Invalid channel layout ... for specified mapping family" - this
-          // is a pre-existing limitation carried over unchanged from Migz
-          // Convert Audio Streams, not something introduced by this merge.
-          if (file.ffProbeData.streams[i].codec_name !== 'opus' && !isDownmixTrack) {
-            audioArgs += `-c:a:${audioIdx} libopus `;
-            if (language) {
-              audioArgs += `-metadata:s:a:${audioIdx} "language=${language}" `;
+        // Catch error here incase user left inputs.convert_all_to_opus empty.
+        try {
+          // Check if inputs.convert_all_to_opus is set to true.
+          if (inputs.convert_all_to_opus === true) {
+            // Check if codec_name for stream is NOT opus.
+            // Skip if this track was already downmixed above.
+            // NOTE: surround (>2ch) sources can hard-fail libopus encoding with
+            // "Invalid channel layout ... for specified mapping family" - this
+            // is a pre-existing limitation carried over unchanged from Migz
+            // Convert Audio Streams, not something introduced by this merge.
+            if (file.ffProbeData.streams[i].codec_name !== 'opus' && !isDownmixTrack) {
+              audioArgs += `-c:a:${outAudioIdx} libopus `;
+              if (language) {
+                audioArgs += `-metadata:s:a:${outAudioIdx} "language=${language}" `;
+              }
+              audioLog
+                += `☒Audio track is ${file.ffProbeData.streams[i].channels} channel but is not opus. Converting. \n`;
+              audioConvert = true;
             }
-            audioLog
-              += `☒Audio track is ${file.ffProbeData.streams[i].channels} channel but is not opus. Converting. \n`;
-            audioConvert = true;
           }
+        } catch (err) {
+          // Error
         }
-      } catch (err) {
-        // Error
+        inputAudioIdx += 1;
+        outAudioIdx += 1;
       }
-      audioIdx += 1;
     }
   }
 
@@ -514,17 +594,18 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   }
 
   if (videoAction === 'none') {
-    if (audioConvert) {
+    if (audioConvert || commentaryRemoved) {
       response.processFile = true;
-      response.preset = `, -map 0 -c copy ${audioArgs} `
+      response.preset = `, -map 0 ${audioRemoveArgs}-c copy ${audioArgs} `
         + '-strict -2 -max_muxing_queue_size 9999 ';
     } else {
       response.processFile = false;
     }
   } else if (videoAction === 'remux') {
     response.processFile = true;
-    if (audioConvert) {
-      response.preset = `, -map 0 -c copy ${extraArguments}${audioArgs}-strict -2 -max_muxing_queue_size 9999 `;
+    if (audioConvert || commentaryRemoved) {
+      response.preset = `, -map 0 ${audioRemoveArgs}-c copy ${extraArguments}${audioArgs}`
+        + '-strict -2 -max_muxing_queue_size 9999 ';
     } else {
       response.preset = `, -map 0 -c copy ${extraArguments}`;
     }
@@ -559,9 +640,9 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     response.preset = getNvdecHwaccelPreset(file, nvdecOptions);
 
     const outputArguments = `${extraArguments}${transcodeOnlyArguments}`;
-    if (audioConvert) {
+    if (audioConvert || commentaryRemoved) {
       response.preset
-        += `${genpts}, -map 0 -c:v hevc_nvenc -cq:v 19 ${bitrateSettings} `
+        += `${genpts}, -map 0 ${audioRemoveArgs}-c:v hevc_nvenc -cq:v 19 ${bitrateSettings} `
         + `-spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy ${audioArgs}-c:s copy `
         + `-strict -2 -max_muxing_queue_size 9999 ${outputArguments}`;
     } else {
@@ -579,8 +660,18 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     }
   }
 
-  // Append audio-pass logging last, mirroring the order audio work would be
-  // logged if this ran as a second plugin after the video pass.
+  // Append commentary-removal logging, then audio-pass logging last, mirroring the order
+  // this work would be logged if it ran as a chain of plugins after the video pass.
+  if (inputs.remove_commentary === true) {
+    if (commentaryRemoved) {
+      response.infoLog += commentaryLog;
+      response.infoLog += `☒Removed ${tracksRemoved} commentary track(s). \n`;
+    } else if (allCommentaryLog) {
+      response.infoLog += allCommentaryLog;
+    } else {
+      response.infoLog += "☑File doesn't contain commentary tracks. \n";
+    }
+  }
   response.infoLog += audioConvert ? audioLog : '☑File contains all required audio formats. \n';
 
   return response;
