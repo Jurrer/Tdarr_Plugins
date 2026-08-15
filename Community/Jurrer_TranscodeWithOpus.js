@@ -13,9 +13,10 @@ const details = () => ({
                   This plugin will skip any files that are in the VP9 codec.
                   Audio tracks can also be converted to opus and downmixed to stereo in the same pass.
                   Commentary audio tracks can optionally be removed in the same pass.
-                  If the video stream isn't first, streams are reordered so Tdarr detects the codec correctly.`,
-  Version: '1.2-custom',
-  Tags: 'pre-processing,ffmpeg,video,audio,nvenc h265,opus,commentary,reorder,configurable',
+                  If the video stream isn't first, streams are reordered so Tdarr detects the codec correctly.
+                  Embedded image streams (MJPEG, PNG, GIF), e.g. cover art, are also removed in the same pass.`,
+  Version: '1.3-custom',
+  Tags: 'pre-processing,ffmpeg,video,audio,nvenc h265,opus,commentary,reorder,image removal,configurable',
   Inputs: [
     {
       name: 'container',
@@ -228,6 +229,12 @@ const isCommentaryStream = (stream) => {
     || handlerName.includes('commentary');
 };
 
+// A video stream counts as an embedded image if its codec is one of the still/animated
+// image formats. Ported from Tdarr_Plugin_MC93_MigzImageRemoval.
+const isImageStream = (stream) => stream.codec_name === 'mjpeg'
+  || stream.codec_name === 'png'
+  || stream.codec_name === 'gif';
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const plugin = (file, librarySettings, inputs, otherArguments) => {
   const lib = require('../methods/lib')();
@@ -292,7 +299,6 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   }
 
   // Set up required variables.
-  let videoIdx = 0;
   let extraArguments = '';
   let genpts = '';
   let bitrateSettings = '';
@@ -478,6 +484,60 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     }
   }
 
+  // --- Image removal pass (from Migz Remove Image Formats From File) ---
+  // Computed up front, like the audio pass, so the result survives whichever branch the
+  // video detection loop below breaks into. `-map -v:N` counts INPUT video streams, so
+  // this stays correct under stream reordering.
+  let imageRemoveArgs = '';
+  let imageLog = '';
+  let imagesRemoved = false;
+  let allImagesLog = '';
+
+  // Work out up front whether removal should actually happen - skip it if every video
+  // stream is an image format, so we don't produce a file with no video at all.
+  let removeImages = false;
+  let totalVideoStreams = 0;
+  let matchedImages = 0;
+  for (let i = 0; i < file.ffProbeData.streams.length; i++) {
+    try {
+      if (file.ffProbeData.streams[i].codec_type.toLowerCase() === 'video') {
+        totalVideoStreams += 1;
+        if (isImageStream(file.ffProbeData.streams[i])) {
+          matchedImages += 1;
+        }
+      }
+    } catch (err) {
+      // err
+    }
+  }
+  if (matchedImages > 0 && matchedImages < totalVideoStreams) {
+    removeImages = true;
+  } else if (matchedImages > 0 && matchedImages === totalVideoStreams) {
+    allImagesLog
+      += `☒All ${totalVideoStreams} video stream(s) are image formats. `
+      + 'Skipping removal to avoid a file with no video. \n';
+  }
+
+  let imageVideoIdx = 0;
+  for (let i = 0; i < file.ffProbeData.streams.length; i++) {
+    let imageCodecType = '';
+    try {
+      imageCodecType = file.ffProbeData.streams[i].codec_type.toLowerCase();
+    } catch (err) {
+      // err
+    }
+    if (imageCodecType === 'video') {
+      if (removeImages && isImageStream(file.ffProbeData.streams[i])) {
+        imageRemoveArgs += `-map -v:${imageVideoIdx} `;
+        imagesRemoved = true;
+      }
+      imageVideoIdx += 1;
+    }
+  }
+  if (imagesRemoved) {
+    imageLog = '☒File has image format stream, removing. \n';
+  }
+
   // Check if force_conform option is checked.
   // If so then check streams and add any extra parameters required to make file conform with output format.
   if (inputs.force_conform === true) {
@@ -547,13 +607,12 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
       // err
     }
     if (codec_type === 'video') {
-      // Check if codec of stream is mjpeg/png, if so then remove this "video" stream.
-      // mjpeg/png are usually embedded pictures that can cause havoc with plugins.
-      if (
-        file.ffProbeData.streams[i].codec_name === 'mjpeg'
-        || file.ffProbeData.streams[i].codec_name === 'png'
-      ) {
-        extraArguments += `-map -v:${videoIdx} `;
+      // Skip embedded image streams (mjpeg/png/gif, e.g. cover art) when detecting "the"
+      // video stream - removal is already handled by the image pass above, and letting a
+      // leading image stream drive the hevc/vp9 check would misdetect the real codec.
+      if (isImageStream(file.ffProbeData.streams[i])) {
+        // eslint-disable-next-line no-continue
+        continue;
       }
       // Check if codec of stream is hevc or vp9 AND check if file.container matches inputs.container.
       // Skip codec check if forceTranscode is true.
@@ -602,16 +661,13 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
           break;
         }
       }
-
-      // Increment videoIdx.
-      videoIdx += 1;
     }
   }
 
   if (videoAction === 'none') {
-    if (audioConvert || commentaryRemoved || reorderStreams) {
+    if (audioConvert || commentaryRemoved || reorderStreams || imagesRemoved) {
       response.processFile = true;
-      response.preset = `, ${mapArgs}${audioRemoveArgs}-c copy ${audioArgs} `
+      response.preset = `, ${mapArgs}${audioRemoveArgs}${imageRemoveArgs}-c copy ${audioArgs} `
         + '-strict -2 -max_muxing_queue_size 9999 ';
     } else {
       response.processFile = false;
@@ -619,10 +675,10 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   } else if (videoAction === 'remux') {
     response.processFile = true;
     if (audioConvert || commentaryRemoved) {
-      response.preset = `, ${mapArgs}${audioRemoveArgs}-c copy ${extraArguments}${audioArgs}`
+      response.preset = `, ${mapArgs}${audioRemoveArgs}${imageRemoveArgs}-c copy ${extraArguments}${audioArgs}`
         + '-strict -2 -max_muxing_queue_size 9999 ';
     } else {
-      response.preset = `, ${mapArgs}-c copy ${extraArguments}`;
+      response.preset = `, ${mapArgs}${imageRemoveArgs}-c copy ${extraArguments}`;
     }
   } else {
     // Keep encoder/filter args out of remux commands; FFmpeg cannot combine them with `-c copy`.
@@ -657,12 +713,12 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     const outputArguments = `${extraArguments}${transcodeOnlyArguments}`;
     if (audioConvert || commentaryRemoved) {
       response.preset
-        += `${genpts}, ${mapArgs}${audioRemoveArgs}-c:v hevc_nvenc -cq:v 19 ${bitrateSettings} `
+        += `${genpts}, ${mapArgs}${audioRemoveArgs}${imageRemoveArgs}-c:v hevc_nvenc -cq:v 19 ${bitrateSettings} `
         + `-spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy ${audioArgs}-c:s copy `
         + `-strict -2 -max_muxing_queue_size 9999 ${outputArguments}`;
     } else {
       response.preset
-        += `${genpts}, ${mapArgs}-c:v hevc_nvenc -cq:v 19 ${bitrateSettings} `
+        += `${genpts}, ${mapArgs}${imageRemoveArgs}-c:v hevc_nvenc -cq:v 19 ${bitrateSettings} `
         + `-spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy -c:s copy -max_muxing_queue_size 9999 ${outputArguments}`;
     }
     response.processFile = true;
@@ -675,10 +731,16 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     }
   }
 
-  // Append reorder logging, then commentary-removal logging, then audio-pass logging last,
-  // mirroring the order this work would be logged if it ran as a chain of plugins.
+  // Append reorder logging, then image-removal logging, then commentary-removal logging,
+  // then audio-pass logging last, mirroring the order this work would be logged if it ran
+  // as a chain of plugins.
   if (reorderStreams) {
     response.infoLog += '☒Video is not in the first stream. Reordering streams. \n';
+  }
+  if (imagesRemoved) {
+    response.infoLog += imageLog;
+  } else if (allImagesLog) {
+    response.infoLog += allImagesLog;
   }
   if (inputs.remove_commentary === true) {
     if (commentaryRemoved) {

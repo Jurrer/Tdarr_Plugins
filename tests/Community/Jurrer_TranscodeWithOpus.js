@@ -1229,6 +1229,169 @@ const tests = [
       container: '.mkv',
     },
   },
+
+  // --- Ported from Migz Remove Image Formats From File ---
+  // No sample fixture ships with an image stream, so each case appends/inserts one onto a
+  // clone of an existing sample.
+
+  // Image stream appended after an already-hevc/mkv file - nothing else to do, so removal
+  // alone triggers processFile. -map -v:1 targets the 2nd video (input) stream.
+  {
+    input: {
+      file: (() => {
+        const file = _.cloneDeep(require('../sampleData/media/sampleH265_1.json'));
+        const imageStream = _.cloneDeep(file.ffProbeData.streams[0]);
+        imageStream.index = 2;
+        imageStream.codec_name = 'mjpeg';
+        file.ffProbeData.streams.push(imageStream);
+        return file;
+      })(),
+      librarySettings: {},
+      inputs: {},
+      otherArguments: {},
+    },
+    output: {
+      processFile: true,
+      preset: ', -map 0 -map -v:1 -c copy  -strict -2 -max_muxing_queue_size 9999 ',
+      handBrakeMode: false,
+      FFmpegMode: true,
+      reQueueAfter: true,
+      infoLog: 'No cutoff set. Checking codec. \n'
+        + 'Codec is hevc and container is mkv. Nothing to do. \n'
+        + '☒File has image format stream, removing. \n'
+        + '☑File contains all required audio formats. \n',
+      container: '.mkv',
+    },
+  },
+
+  // gif is also covered (MC93 covers mjpeg/png/gif; the old inline check this plugin
+  // inherited from Migz1FFMPEG only covered mjpeg/png).
+  {
+    input: {
+      file: (() => {
+        const file = _.cloneDeep(require('../sampleData/media/sampleH265_1.json'));
+        const imageStream = _.cloneDeep(file.ffProbeData.streams[0]);
+        imageStream.index = 2;
+        imageStream.codec_name = 'gif';
+        file.ffProbeData.streams.push(imageStream);
+        return file;
+      })(),
+      librarySettings: {},
+      inputs: {},
+      otherArguments: {},
+    },
+    output: {
+      processFile: true,
+      preset: ', -map 0 -map -v:1 -c copy  -strict -2 -max_muxing_queue_size 9999 ',
+      handBrakeMode: false,
+      FFmpegMode: true,
+      reQueueAfter: true,
+      infoLog: 'No cutoff set. Checking codec. \n'
+        + 'Codec is hevc and container is mkv. Nothing to do. \n'
+        + '☒File has image format stream, removing. \n'
+        + '☑File contains all required audio formats. \n',
+      container: '.mkv',
+    },
+  },
+
+  // Leading cover art (image stream before the real video stream) no longer hijacks codec
+  // detection - the hevc stream still drives videoAction to 'none', not a transcode.
+  {
+    input: {
+      file: (() => {
+        const file = _.cloneDeep(require('../sampleData/media/sampleH265_1.json'));
+        const coverStream = _.cloneDeep(file.ffProbeData.streams[0]);
+        coverStream.index = 0;
+        coverStream.codec_name = 'mjpeg';
+        file.ffProbeData.streams[0].index = 1;
+        file.ffProbeData.streams.unshift(coverStream);
+        return file;
+      })(),
+      librarySettings: {},
+      inputs: {},
+      otherArguments: {},
+    },
+    output: {
+      processFile: true,
+      preset: ', -map 0 -map -v:0 -c copy  -strict -2 -max_muxing_queue_size 9999 ',
+      handBrakeMode: false,
+      FFmpegMode: true,
+      reQueueAfter: true,
+      infoLog: 'No cutoff set. Checking codec. \n'
+        + 'Codec is hevc and container is mkv. Nothing to do. \n'
+        + '☒File has image format stream, removing. \n'
+        + '☑File contains all required audio formats. \n',
+      container: '.mkv',
+    },
+  },
+
+  // Image removal alongside a full transcode - -map -v:1 appears inside the hevc_nvenc preset.
+  {
+    input: {
+      file: (() => {
+        const file = _.cloneDeep(require('../sampleData/media/sampleH264_1.json'));
+        const imageStream = _.cloneDeep(file.ffProbeData.streams[0]);
+        imageStream.index = file.ffProbeData.streams.length;
+        imageStream.codec_name = 'png';
+        file.ffProbeData.streams.push(imageStream);
+        return file;
+      })(),
+      librarySettings: {},
+      inputs: {},
+      otherArguments: {},
+    },
+    output: {
+      processFile: true,
+      preset: '-hwaccel cuda -hwaccel_output_format cuda, -map 0 -map -v:1 -c:v hevc_nvenc -cq:v 19 -b:v 758k -minrate 530k -maxrate 985k -bufsize 1517k -spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy -c:s copy -max_muxing_queue_size 9999 ',
+      handBrakeMode: false,
+      FFmpegMode: true,
+      reQueueAfter: true,
+      infoLog: 'No cutoff set. Checking codec. \n'
+        + 'Container for output selected as mkv. \n'
+        + 'Current bitrate = 1517 \n'
+        + 'Bitrate settings: \n'
+        + 'Target = 758 \n'
+        + 'Minimum = 530 \n'
+        + 'Maximum = 985 \n'
+        + 'Codec is not hevc/vp9 and bitrate 1517k is above cutoff. Transcoding to hevc. \n'
+        + '☒File has image format stream, removing. \n'
+        + '☑File contains all required audio formats. \n',
+      container: '.mkv',
+    },
+  },
+
+  // Every video stream is an image format - removal is skipped to avoid a file with no
+  // video, mirroring the all-commentary guard.
+  {
+    input: {
+      file: (() => {
+        const file = _.cloneDeep(require('../sampleData/media/sampleH265_1.json'));
+        file.ffProbeData.streams[0].codec_name = 'mjpeg';
+        return file;
+      })(),
+      librarySettings: {},
+      inputs: {},
+      otherArguments: {},
+    },
+    output: {
+      processFile: true,
+      preset: '-hwaccel cuda -hwaccel_output_format cuda, -map 0 -c:v hevc_nvenc -cq:v 19 -b:v 1529k -minrate 1070k -maxrate 1987k -bufsize 3058k -spatial_aq:v 1 -rc-lookahead:v 32 -c:a copy -c:s copy -max_muxing_queue_size 9999 ',
+      handBrakeMode: false,
+      FFmpegMode: true,
+      reQueueAfter: true,
+      infoLog: 'No cutoff set. Checking codec. \n'
+        + 'Container for output selected as mkv. \n'
+        + 'Current bitrate = 3058 \n'
+        + 'Bitrate settings: \n'
+        + 'Target = 1529 \n'
+        + 'Minimum = 1070 \n'
+        + 'Maximum = 1987 \n'
+        + 'Codec is not hevc/vp9 and bitrate 3058k is above cutoff. Transcoding to hevc. \n'
+        + '☒All 1 video stream(s) are image formats. Skipping removal to avoid a file with no video. \n'
+        + '☑File contains all required audio formats. \n',
+      container: '.mkv',
+    },
+  },
 ];
 
 void run(tests);
