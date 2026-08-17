@@ -14,25 +14,33 @@ const details = () => ({
                   Audio tracks can also be converted to opus and downmixed to stereo in the same pass.
                   Commentary audio tracks can optionally be removed in the same pass.
                   If the video stream isn't first, streams are reordered so Tdarr detects the codec correctly.
-                  Embedded image streams (MJPEG, PNG, GIF), e.g. cover art, are also removed in the same pass.`,
-  Version: '1.3-custom',
+                  Embedded image streams (MJPEG, PNG, GIF), e.g. cover art, are also removed in the same pass.
+                  Container is a comma-separated allowlist (e.g. "mkv,mp4"): if the file's current container is
+                  on the list and already supports every track type it contains, it is kept as-is and the remux
+                  is skipped to save processing time. Otherwise the file is remuxed to the first allowlisted
+                  container that supports all its tracks.`,
+  Version: '1.5-custom',
   Tags: 'pre-processing,ffmpeg,video,audio,nvenc h265,opus,commentary,reorder,image removal,configurable',
   Inputs: [
     {
       name: 'container',
       type: 'string',
-      defaultValue: 'mkv',
+      defaultValue: 'mkv,mp4',
       inputUI: {
         type: 'text',
       },
-      tooltip: `Specify output container of file. Use 'original' wihout quotes to keep original container.
-                \\n Ensure that all stream types you may have are supported by your chosen container.
-                \\n mkv is recommended.
+      tooltip: `Specify a comma-separated allowlist of output containers, e.g. "mkv,mp4".
+                \\n If the file's current container is on this list and already supports every track type
+                it contains, the file is kept in its current container and the remux is skipped.
+                \\n Otherwise the file is remuxed to the first listed container that supports all its
+                tracks (falling back to the first listed container if none do).
+                \\n Use 'original' wihout quotes (on its own, not combined with a list) to always keep
+                the original container.
                     \\nExample:\\n
-                    mkv
+                    mkv,mp4
 
                     \\nExample:\\n
-                    mp4
+                    mkv
 
                     \\nExample:\\n
                     original`,
@@ -235,6 +243,39 @@ const isImageStream = (stream) => stream.codec_name === 'mjpeg'
   || stream.codec_name === 'png'
   || stream.codec_name === 'gif';
 
+// Track codecs/types each container is known NOT to support. Mirrors the pairings
+// force_conform already relies on (see its mkv/mp4 branches below), since those are the
+// only container/codec incompatibilities this plugin has vetted. Containers not listed
+// here are unknown quantities and are treated as unsupported (fail safe -> allow remux).
+const CONTAINER_UNSUPPORTED = {
+  mkv: { codecTypes: ['data'], codecNames: ['mov_text', 'eia_608', 'timed_id3'] },
+  matroska: { codecTypes: ['data'], codecNames: ['mov_text', 'eia_608', 'timed_id3'] },
+  mp4: {
+    codecTypes: ['attachment'],
+    codecNames: ['hdmv_pgs_subtitle', 'eia_608', 'subrip', 'ass', 'ssa', 'timed_id3', 'dvd_subtitle'],
+  },
+  m4v: {
+    codecTypes: ['attachment'],
+    codecNames: ['hdmv_pgs_subtitle', 'eia_608', 'subrip', 'ass', 'ssa', 'timed_id3', 'dvd_subtitle'],
+  },
+};
+
+// True if every stream in a file is a type/codec that `containerName` is known to support.
+// Used both to check whether the file's CURRENT container is good enough to keep, and to
+// pick which allowlisted container to remux to when it isn't.
+const containerSupportsAllTracks = (containerName, streams) => {
+  const rules = CONTAINER_UNSUPPORTED[(containerName || '').toLowerCase()];
+  if (!rules) return false;
+  for (let i = 0; i < streams.length; i++) {
+    const codecType = (streams[i].codec_type || '').toLowerCase();
+    const codecName = (streams[i].codec_name || '').toLowerCase();
+    if (rules.codecTypes.includes(codecType) || rules.codecNames.includes(codecName)) {
+      return false;
+    }
+  }
+  return true;
+};
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const plugin = (file, librarySettings, inputs, otherArguments) => {
   const lib = require('../methods/lib')();
@@ -259,20 +300,43 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     return response;
   }
 
-  if (inputs.container === 'original') {
-    // eslint-disable-next-line no-param-reassign
-    inputs.container = `${file.container}`;
-    response.container = `.${file.container}`;
-  } else {
-    response.container = `.${inputs.container}`;
-  }
-
   // Check if file is a video. If it isn't then exit plugin.
   if (file.fileMedium !== 'video') {
     response.processFile = false;
     response.infoLog += 'File is not a video. \n';
     return response;
   }
+
+  // --- Resolve output container ---
+  // `container` is either the literal 'original' (always keep the file's current container,
+  // standalone - not combinable with a list) or a comma-separated allowlist (e.g. 'mkv,mp4').
+  // The file's CURRENT container is kept - no remux - when it's on the allowlist AND able to
+  // hold every track type present. Otherwise the output is the first allowlisted container
+  // that can hold everything, falling back to the first entry (force_conform, if enabled,
+  // then drops whatever doesn't fit).
+  const fileContainer = String(file.container || '').toLowerCase();
+  let outputContainer;
+  if (inputs.container.trim().toLowerCase() === 'original') {
+    outputContainer = fileContainer;
+  } else {
+    const containerList = String(inputs.container).toLowerCase().split(',')
+      .map((c) => c.trim())
+      .filter((c) => c !== '');
+    if (containerList.length === 0) {
+      response.infoLog
+        += 'Plugin has not been configured, please configure required options. Skipping this plugin. \n';
+      response.processFile = false;
+      return response;
+    }
+    const keepCurrentContainer = containerList.includes(fileContainer)
+      && containerSupportsAllTracks(fileContainer, file.ffProbeData.streams);
+    outputContainer = keepCurrentContainer
+      ? fileContainer
+      : (containerList.find((c) => containerSupportsAllTracks(c, file.ffProbeData.streams))
+        || containerList[0]);
+  }
+  const containerChangeNeeded = fileContainer !== outputContainer;
+  response.container = `.${outputContainer}`;
 
   // --- Stream reorder (from Lmg1 Reorder Streams) ---
   // Tdarr reads a file's codec from its first stream, so a file whose stream 0 is
@@ -317,10 +381,7 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   const maximumBitrate = ~~(targetBitrate * 1.3);
 
   // If Container .ts or .avi set genpts to fix unknown timestamp
-  if (
-    inputs.container.toLowerCase() === 'ts'
-    || inputs.container.toLowerCase() === 'avi'
-  ) {
+  if (outputContainer === 'ts' || outputContainer === 'avi') {
     genpts = ' -fflags +genpts';
   }
 
@@ -541,7 +602,7 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
   // Check if force_conform option is checked.
   // If so then check streams and add any extra parameters required to make file conform with output format.
   if (inputs.force_conform === true) {
-    if (inputs.container.toLowerCase() === 'mkv') {
+    if (outputContainer === 'mkv') {
       extraArguments += '-map -0:d ';
       for (let i = 0; i < file.ffProbeData.streams.length; i++) {
         try {
@@ -559,7 +620,7 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
         }
       }
     }
-    if (inputs.container.toLowerCase() === 'mp4') {
+    if (outputContainer === 'mp4') {
       for (let i = 0; i < file.ffProbeData.streams.length; i++) {
         try {
           if (
@@ -593,8 +654,8 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     : undefined;
 
   // 'transcode' is the default outcome; the loop below can downgrade this to
-  // 'none' (nothing to do / below cutoff, container already matches) or
-  // 'remux' (container mismatch only, or below cutoff with mismatch).
+  // 'none' (nothing to do / below cutoff, no container change needed) or
+  // 'remux' (container change only, or below cutoff with a container change).
   let videoAction = 'transcode';
 
   // Go through each stream in the file.
@@ -614,43 +675,44 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
         // eslint-disable-next-line no-continue
         continue;
       }
-      // Check if codec of stream is hevc or vp9 AND check if file.container matches inputs.container.
+      // Check if codec of stream is hevc or vp9 AND check if a container change is needed.
       // Skip codec check if forceTranscode is true.
       if (forceTranscode === false) {
         const belowCutoff = inputs.bitrate_cutoff !== ''
           && currentBitrate <= inputs.bitrate_cutoff;
 
-        // If codec is hevc/vp9 and container matches - nothing to do (or remux if needed)
+        // If codec is hevc/vp9 and no container change is needed - nothing to do
         if (
           (file.ffProbeData.streams[i].codec_name === 'hevc'
             || file.ffProbeData.streams[i].codec_name === 'vp9')
-          && file.container === inputs.container
+          && !containerChangeNeeded
         ) {
           videoAction = 'none';
           response.infoLog
-            += `Codec is ${file.ffProbeData.streams[i].codec_name} and container is ${inputs.container}. `
+            += `Codec is ${file.ffProbeData.streams[i].codec_name} and container is ${outputContainer}. `
             + 'Nothing to do. \n';
           break;
         }
-        // If codec is hevc/vp9 but container mismatch - remux if below cutoff, transcode if above
+        // If codec is hevc/vp9 but a container change is needed - remux if below cutoff,
+        // transcode if above.
         if (
           (file.ffProbeData.streams[i].codec_name === 'hevc'
             || file.ffProbeData.streams[i].codec_name === 'vp9')
-          && file.container !== inputs.container
+          && containerChangeNeeded
         ) {
           videoAction = 'remux';
           response.infoLog
-            += `Codec is ${file.ffProbeData.streams[i].codec_name} but container mismatch `
-            + `(current: ${file.container}, wanted: ${inputs.container}). Remuxing. \n`;
+            += `Codec is ${file.ffProbeData.streams[i].codec_name} but container change needed `
+            + `(current: ${fileContainer}, wanted: ${outputContainer}). Remuxing. \n`;
           break;
         }
 
-        // Below cutoff - skip transcode but remux if container mismatch
+        // Below cutoff - skip transcode but remux if a container change is needed.
         if (belowCutoff) {
-          if (file.container !== inputs.container) {
+          if (containerChangeNeeded) {
             videoAction = 'remux';
             response.infoLog
-              += `Container mismatch (current: ${file.container}, wanted: ${inputs.container}). `
+              += `Container change needed (current: ${fileContainer}, wanted: ${outputContainer}). `
               + 'Remuxing only. \n';
           } else {
             videoAction = 'none';
@@ -698,7 +760,7 @@ const plugin = (file, librarySettings, inputs, otherArguments) => {
     bitrateSettings = `-b:v ${targetBitrate}k -minrate ${minimumBitrate}k `
       + `-maxrate ${maximumBitrate}k -bufsize ${currentBitrate}k`;
     // Print to infoLog information around file & bitrate settings.
-    response.infoLog += `Container for output selected as ${inputs.container}. \n`;
+    response.infoLog += `Container for output selected as ${outputContainer}. \n`;
     response.infoLog += `Current bitrate = ${currentBitrate} \n`;
     response.infoLog += 'Bitrate settings: \n';
     response.infoLog += `Target = ${targetBitrate} \n`;
